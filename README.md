@@ -3,6 +3,11 @@
 A first-party Civitai App Block: a community voting board where anyone suggests
 an app or feature they'd like on Civitai and up-votes others' ideas.
 
+> This is a Civitai **onsite App Block** — it runs in-platform at
+> `app-requests.civit.ai`, embedded by the Civitai host. Open it via
+> [`civitai.com/apps/run/app-requests`](https://civitai.com/apps/run/app-requests),
+> not the bare subdomain. See the [Civitai developer docs](https://developer.civitai.com).
+
 ## What this is
 
 A sandboxed page app served in an iframe by the Civitai host, built entirely on
@@ -58,3 +63,11 @@ mock host over the actual postMessage transport.
 civitai login        # once
 civitai app submit   # packages manifest + src + build config (platform rebuilds)
 ```
+
+## Links
+
+- Developer docs — [developer.civitai.com](https://developer.civitai.com)
+- Live app — [app-requests.civit.ai](https://app-requests.civit.ai)
+- SDK contract — [`@civitai/app-sdk`](https://www.npmjs.com/package/@civitai/app-sdk)
+- React hooks + UI pack — [`@civitai/blocks-react`](https://www.npmjs.com/package/@civitai/blocks-react)
+- CLI — [`github.com/civitai/cli`](https://github.com/civitai/cli)
