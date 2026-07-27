@@ -1,0 +1,30 @@
+{
+  "$schema": "https://civitai.com/schemas/app-block/v1.json",
+  "blockId": "app-requests",
+  "version": "0.1.3",
+  "name": "App Requests",
+  "type": "block",
+  "scopes": [
+    "apps:storage:read",
+    "apps:storage:write",
+    "apps:storage:shared:read",
+    "apps:storage:shared:write",
+    "user:read:self"
+  ],
+  "page": {
+    "path": "/",
+    "title": "App Requests",
+    "icon": "bulb"
+  },
+  "iframe": {
+    "minHeight": 600,
+    "maxHeight": 4000,
+    "resizable": true,
+    "sandbox": "allow-scripts allow-forms"
+  },
+  "category": "utility",
+  "contentRating": "g",
+  "minApiVersion": "1.0",
+  "buildCommand": "npm run build",
+  "outputDir": "dist"
+}

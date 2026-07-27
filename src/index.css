@@ -1,0 +1,15 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+/* The W6 component pack owns most styling via CSS vars scoped to [data-theme].
+   These are just page-level resets; the app root sets data-theme itself. */
