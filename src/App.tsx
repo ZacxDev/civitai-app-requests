@@ -40,6 +40,19 @@ import {
   TITLE_MAX,
   type SortMode,
 } from './format.js';
+import {
+  brandMarkStyle,
+  cardStyle,
+  contentStyle,
+  metaText,
+  mutedText,
+  pageStyle,
+  sectionTitle,
+  tabularNums,
+  token,
+} from './theme.js';
+import { EmptyState } from './components/EmptyState.js';
+import { VoteButton } from './components/VoteButton.js';
 
 // The per-viewer KV key under which we persist the SET of shared-entry keys this
 // viewer has up-voted. The shared API is one-vote-per-user + server-enforced but
@@ -66,6 +79,15 @@ export function App() {
 
   const rootRef = useRef<HTMLDivElement>(null);
   useBlockResize(rootRef);
+
+  // The submit form's wrapper — the empty-state "suggest one" action focuses the
+  // first field inside it (DOM-scoped, so it's independent of pack ref-forwarding).
+  const formRef = useRef<HTMLDivElement>(null);
+  const focusForm = useCallback(() => {
+    const el = formRef.current?.querySelector<HTMLElement>('input, textarea');
+    el?.focus();
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
 
   const viewerId = viewer?.id ?? null;
   const isAnon = ready && viewer == null;
@@ -303,18 +325,16 @@ export function App() {
 
   return (
     <div ref={rootRef} data-theme={theme} style={pageStyle}>
-      <div style={containerStyle}>
+      <div style={contentStyle}>
         <Stack gap={20}>
           <Header count={items.length} />
 
           {isAnon ? (
             <SignInCard onSignIn={() => requestSignIn()} />
           ) : (
-            <SubmitForm
-              disabled={!ready}
-              shared={shared}
-              onSubmitted={onSubmitted}
-            />
+            <div ref={formRef}>
+              <SubmitForm disabled={!ready} shared={shared} onSubmitted={onSubmitted} />
+            </div>
           )}
 
           {actionError && (
@@ -323,15 +343,15 @@ export function App() {
             </Alert>
           )}
 
-          <Group justify="space-between" align="center" wrap>
-            <strong style={sectionTitleStyle}>Requests</strong>
+          <Group justify="space-between" align="center" gap={10} wrap>
+            <strong style={sectionTitle}>Requests</strong>
             <SortToggle sort={sort} onChange={handleSortChange} />
           </Group>
 
           {loading ? (
-            <Group gap={10} align="center">
+            <Group gap={10} align="center" role="status" aria-live="polite">
               <Loader size="sm" />
-              <span style={mutedStyle}>Loading requests…</span>
+              <span style={mutedText}>Loading requests…</span>
             </Group>
           ) : listError ? (
             <Alert color="error" title="Couldn't load requests">
@@ -343,7 +363,27 @@ export function App() {
               </div>
             </Alert>
           ) : items.length === 0 ? (
-            <EmptyState isAnon={isAnon} />
+            <EmptyState
+              data-testid="empty-state"
+              icon="💡"
+              title="No requests yet"
+              body={
+                isAnon
+                  ? 'Sign in to be the first to suggest an app or feature.'
+                  : 'Be the first to suggest an app or feature you’d like on Civitai.'
+              }
+              action={
+                isAnon ? (
+                  <Button color="primary" onClick={() => requestSignIn()} data-testid="empty-signin">
+                    Sign in
+                  </Button>
+                ) : (
+                  <Button color="primary" onClick={focusForm} data-testid="empty-suggest">
+                    Suggest the first one
+                  </Button>
+                )
+              }
+            />
           ) : (
             <Stack gap={10}>
               {sorted.map((item) => (
@@ -381,18 +421,30 @@ export function App() {
 
 function Header({ count }: { count: number }) {
   return (
-    <Stack gap={4}>
-      <Group justify="space-between" align="center" wrap>
-        <h1 style={h1Style}>App Requests</h1>
+    <Stack gap={10}>
+      <Group
+        justify="space-between"
+        align="center"
+        gap={12}
+        style={{ paddingBottom: 14, borderBottom: `1px solid ${token.border}` }}
+      >
+        <Group gap={12} align="center" wrap={false}>
+          <span aria-hidden="true" style={brandMarkStyle}>
+            <BulbIcon />
+          </span>
+          <Stack gap={2}>
+            <h1 style={h1Style}>App Requests</h1>
+            <span style={metaText}>
+              Suggest an app or feature — and up-vote the ideas you want most.
+            </span>
+          </Stack>
+        </Group>
         {count > 0 && (
-          <Badge variant="light" color="primary">
-            {count} idea{count === 1 ? '' : 's'}
+          <Badge variant="light" color="primary" size="lg">
+            {count.toLocaleString()} idea{count === 1 ? '' : 's'}
           </Badge>
         )}
       </Group>
-      <p style={subtitleStyle}>
-        Suggest an app or feature you'd like on Civitai — and up-vote the ideas you want most.
-      </p>
     </Stack>
   );
 }
@@ -449,40 +501,40 @@ function SubmitForm({
   return (
     <Card padding="md" style={cardStyle}>
       <Stack gap={12}>
-        <strong style={sectionTitleStyle}>Suggest a request</strong>
-        <TextInput
-          label="Title"
-          placeholder="e.g. A prompt-library app with tags"
-          value={title}
-          maxLength={TITLE_MAX + 40 /* let the server be the hard gate; warn softly */}
-          onChange={(e) => {
-            setTitle(e.currentTarget.value);
-            if (error) setError(null);
-          }}
-          error={titleOver ? `Title must be ${TITLE_MAX} characters or fewer` : undefined}
-          data-testid="title-input"
-        />
-        <div style={hintRowStyle}>
-          <span style={titleOver ? hintOverStyle : hintStyle}>
-            {lengthHint(title, TITLE_MAX)}
-          </span>
+        <strong style={sectionTitle}>Suggest a request</strong>
+        <div>
+          <TextInput
+            label="Title"
+            placeholder="e.g. A prompt-library app with tags"
+            value={title}
+            maxLength={TITLE_MAX + 40 /* let the server be the hard gate; warn softly */}
+            onChange={(e) => {
+              setTitle(e.currentTarget.value);
+              if (error) setError(null);
+            }}
+            error={titleOver ? `Title must be ${TITLE_MAX} characters or fewer` : undefined}
+            data-testid="title-input"
+          />
+          <div style={hintRowStyle}>
+            <span style={titleOver ? hintOverStyle : hintStyle}>{lengthHint(title, TITLE_MAX)}</span>
+          </div>
         </div>
-        <Textarea
-          label="Details (optional)"
-          placeholder="What should it do? Who's it for? Any references?"
-          value={body}
-          rows={4}
-          onChange={(e) => {
-            setBody(e.currentTarget.value);
-            if (error) setError(null);
-          }}
-          error={bodyOver ? `Details must be ${BODY_MAX} characters or fewer` : undefined}
-          data-testid="body-input"
-        />
-        <div style={hintRowStyle}>
-          <span style={bodyOver ? hintOverStyle : hintStyle}>
-            {lengthHint(body, BODY_MAX)}
-          </span>
+        <div>
+          <Textarea
+            label="Details (optional)"
+            placeholder="What should it do? Who's it for? Any references?"
+            value={body}
+            rows={4}
+            onChange={(e) => {
+              setBody(e.currentTarget.value);
+              if (error) setError(null);
+            }}
+            error={bodyOver ? `Details must be ${BODY_MAX} characters or fewer` : undefined}
+            data-testid="body-input"
+          />
+          <div style={hintRowStyle}>
+            <span style={bodyOver ? hintOverStyle : hintStyle}>{lengthHint(body, BODY_MAX)}</span>
+          </div>
         </div>
 
         {error && (
@@ -532,40 +584,32 @@ function RequestRow({
   return (
     <Card padding="md" style={cardStyle} data-testid="request-row" data-key={item.key}>
       <Group gap={14} align="flex-start" wrap={false}>
-        <button
-          type="button"
-          onClick={onVote}
-          disabled={busy}
-          aria-pressed={voted}
-          aria-label={voted ? `Remove your vote (${item.count})` : `Up-vote (${item.count})`}
-          data-testid="vote-btn"
-          style={voteButtonStyle(voted)}
-        >
-          <span aria-hidden style={voteCaretStyle}>▲</span>
-          <span style={voteCountStyle} data-testid="vote-count">
-            {item.count}
-          </span>
-        </button>
+        <VoteButton count={item.count} voted={voted} busy={busy} onClick={onVote} />
 
-        <Stack gap={6} style={{ flex: 1, minWidth: 0 }}>
+        <Stack gap={6} style={{ flex: '1 1 260px', minWidth: 0 }}>
           <span style={requestTitleStyle}>{item.value.title}</span>
           {item.value.body && <p style={requestBodyStyle}>{item.value.body}</p>}
           <Group gap={8} align="center" wrap>
-            <span style={metaStyle}>{authorLabel(item.authorUserId, viewerId)}</span>
-            <span style={metaDotStyle} aria-hidden>·</span>
-            <span style={metaStyle}>{relativeTime(item.createdAt)}</span>
+            <span style={metaText}>{authorLabel(item.authorUserId, viewerId)}</span>
+            <span style={metaDotStyle} aria-hidden>
+              ·
+            </span>
+            <span style={metaText}>{relativeTime(item.createdAt)}</span>
             {own && (
               <>
-                <span style={metaDotStyle} aria-hidden>·</span>
-                <button
-                  type="button"
+                <span style={metaDotStyle} aria-hidden>
+                  ·
+                </span>
+                <Button
+                  variant="subtle"
+                  size="sm"
+                  color="error"
                   onClick={onWithdraw}
                   disabled={busy}
-                  style={withdrawStyle}
                   data-testid="withdraw-btn"
                 >
                   Withdraw
-                </button>
+                </Button>
               </>
             )}
           </Group>
@@ -583,11 +627,12 @@ function SortToggle({
   onChange: (s: SortMode) => void;
 }) {
   return (
-    <Group gap={6} align="center">
+    <Group gap={6} align="center" role="group" aria-label="Sort requests" wrap={false}>
       <Button
         size="sm"
         variant={sort === 'top' ? 'filled' : 'subtle'}
         onClick={() => onChange('top')}
+        aria-pressed={sort === 'top'}
         data-testid="sort-top"
       >
         Top
@@ -596,6 +641,7 @@ function SortToggle({
         size="sm"
         variant={sort === 'newest' ? 'filled' : 'subtle'}
         onClick={() => onChange('newest')}
+        aria-pressed={sort === 'newest'}
         data-testid="sort-newest"
       >
         Newest
@@ -604,29 +650,13 @@ function SortToggle({
   );
 }
 
-function EmptyState({ isAnon }: { isAnon: boolean }) {
-  return (
-    <Card padding="lg" style={cardStyle}>
-      <Stack gap={6} align="center">
-        <span style={{ fontSize: 30 }} aria-hidden>💡</span>
-        <strong style={sectionTitleStyle}>No requests yet</strong>
-        <span style={mutedStyle}>
-          {isAnon
-            ? 'Sign in to be the first to suggest an app or feature.'
-            : 'Be the first to suggest an app or feature.'}
-        </span>
-      </Stack>
-    </Card>
-  );
-}
-
 function SignInCard({ onSignIn }: { onSignIn: () => void }) {
   return (
     <Card padding="md" style={cardStyle}>
-      <Group justify="space-between" align="center" wrap>
-        <Stack gap={2}>
-          <strong style={sectionTitleStyle}>Sign in to join in</strong>
-          <span style={mutedStyle}>You can browse requests below. Sign in to post or vote.</span>
+      <Group justify="space-between" align="center" gap={12} wrap>
+        <Stack gap={2} style={{ flex: '1 1 240px', minWidth: 0 }}>
+          <strong style={sectionTitle}>Sign in to join in</strong>
+          <span style={mutedText}>You can browse requests below. Sign in to post or vote.</span>
         </Stack>
         <Button color="primary" onClick={onSignIn} data-testid="signin-btn">
           Sign in
@@ -636,79 +666,46 @@ function SignInCard({ onSignIn }: { onSignIn: () => void }) {
   );
 }
 
-// ---- styles (theme-aware via the W6 pack CSS vars set by data-theme) ----
+/** Inline `bulb` glyph (currentColor), matching the manifest's page icon. No external dep. */
+function BulbIcon(): React.JSX.Element {
+  return (
+    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.5.4.9 1 1 1.7l.1.5h5l.1-.5c.1-.7.5-1.3 1-1.7A6 6 0 0 0 12 3Z"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
-const pageStyle: CSSProperties = {
-  minHeight: '100dvh',
-  background: 'var(--ci-color-surface-2, transparent)',
-  color: 'var(--ci-color-text, inherit)',
-  boxSizing: 'border-box',
-};
-const containerStyle: CSSProperties = {
-  maxWidth: 720,
-  margin: '0 auto',
-  padding: '24px 16px 48px',
-};
-const h1Style: CSSProperties = { fontSize: 26, margin: 0, lineHeight: 1.2 };
-const subtitleStyle: CSSProperties = {
+// ---- styles (theme-aware via the @civitai/theme `--civitai-*` tokens set by
+// data-theme; see ./theme.ts). Zero hardcoded colors. ----
+
+const h1Style: CSSProperties = {
+  fontSize: 19,
   margin: 0,
-  color: 'var(--ci-color-text-muted, #868e96)',
-  lineHeight: 1.5,
+  lineHeight: 1.2,
+  letterSpacing: '-0.01em',
+  color: token.text,
 };
-const sectionTitleStyle: CSSProperties = { fontSize: 16 };
-const cardStyle: CSSProperties = {
-  background: 'var(--ci-color-surface, transparent)',
-  border: '1px solid var(--ci-color-border, rgba(128,128,128,0.25))',
+const hintRowStyle: CSSProperties = { display: 'flex', justifyContent: 'flex-end', marginTop: 4 };
+const hintStyle: CSSProperties = { ...metaText, ...tabularNums };
+const hintOverStyle: CSSProperties = { ...hintStyle, color: token.error, fontWeight: 600 };
+const requestTitleStyle: CSSProperties = {
+  fontWeight: 600,
+  fontSize: 15,
+  lineHeight: 1.35,
+  color: token.text,
+  wordBreak: 'break-word',
 };
-const hintRowStyle: CSSProperties = { display: 'flex', justifyContent: 'flex-end', marginTop: -6 };
-const hintStyle: CSSProperties = {
-  fontSize: 12,
-  color: 'var(--ci-color-text-muted, #868e96)',
-  fontVariantNumeric: 'tabular-nums',
-};
-const hintOverStyle: CSSProperties = { ...hintStyle, color: 'var(--ci-color-error, #e03131)', fontWeight: 600 };
-const requestTitleStyle: CSSProperties = { fontWeight: 600, fontSize: 15, lineHeight: 1.35, wordBreak: 'break-word' };
 const requestBodyStyle: CSSProperties = {
+  ...mutedText,
   margin: 0,
-  color: 'var(--ci-color-text-muted, #868e96)',
-  lineHeight: 1.5,
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
 };
-const metaStyle: CSSProperties = { fontSize: 12, color: 'var(--ci-color-text-muted, #868e96)' };
-const metaDotStyle: CSSProperties = { color: 'var(--ci-color-text-muted, #868e96)' };
-const mutedStyle: CSSProperties = { color: 'var(--ci-color-text-muted, #868e96)' };
-const footerStyle: CSSProperties = {
-  fontSize: 12,
-  color: 'var(--ci-color-text-muted, #868e96)',
-  textAlign: 'center',
-  margin: 0,
-};
-const withdrawStyle: CSSProperties = {
-  background: 'none',
-  border: 'none',
-  padding: 0,
-  font: 'inherit',
-  fontSize: 12,
-  color: 'var(--ci-color-error, #e03131)',
-  cursor: 'pointer',
-  textDecoration: 'underline',
-};
-const voteCaretStyle: CSSProperties = { fontSize: 12, lineHeight: 1 };
-const voteCountStyle: CSSProperties = { fontSize: 15, fontWeight: 700, fontVariantNumeric: 'tabular-nums' };
-function voteButtonStyle(voted: boolean): CSSProperties {
-  return {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 2,
-    minWidth: 52,
-    padding: '8px 6px',
-    borderRadius: 8,
-    cursor: 'pointer',
-    border: `1px solid ${voted ? 'var(--ci-color-primary, #1971c2)' : 'var(--ci-color-border, rgba(128,128,128,0.35))'}`,
-    background: voted ? 'var(--ci-color-primary, #1971c2)' : 'transparent',
-    color: voted ? '#fff' : 'var(--ci-color-text, inherit)',
-    transition: 'background 120ms ease, border-color 120ms ease',
-  };
-}
+const metaDotStyle: CSSProperties = { color: token.dimmed };
+const footerStyle: CSSProperties = { ...metaText, textAlign: 'center', margin: 0 };

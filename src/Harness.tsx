@@ -6,6 +6,8 @@ import {
   type MockSharedSeed,
 } from '@civitai/blocks-react/testing';
 
+import { elevate, radius, token } from './theme.js';
+
 // A seeded, cross-user board so the local harness looks like a live one. Author
 // ids other than the viewer (7777) exercise the "user #N" label; the viewer's
 // own seed (author 7777) exercises the withdraw affordance; `voters` seeds the
@@ -49,14 +51,23 @@ export function Harness({ children }: { children: ReactNode }) {
   const [failNext, setFailNext] = useState(0);
   const [key, setKey] = useState(0);
 
+  // Dev-only URL toggle: `?seed=empty` mounts an empty board so the redesigned
+  // "no requests yet" empty state is easy to preview/screenshot. Harness-only —
+  // it never affects the shipped block.
+  const emptySeed =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('seed') === 'empty';
+
   const options: MockHostOptions = {
     viewer: anon ? null : { id: 7777, username: 'dev-viewer' },
-    shared: { seed: SHARED_SEED, failNext: failNext || undefined },
+    shared: { seed: emptySeed ? [] : SHARED_SEED, failNext: failNext || undefined },
     theme: 'dark',
   };
 
   return (
-    <div style={rootStyle}>
+    // The mock chrome is pinned to the dark terminal look (its own data-theme) so
+    // it reads as unmistakably NOT the app, regardless of the app's theme below.
+    <div data-theme="dark" style={rootStyle}>
       <div data-harness-banner="mock" style={bannerStyle}>
         MOCK HOST · shared store is in-memory · nothing is written to Civitai
       </div>
@@ -114,11 +125,12 @@ function ScenarioPanel({
   );
 }
 
+// Dev-only mock chrome. Colors resolve to `--civitai-*` tokens (via ./theme, on a
+// `data-theme="dark"` root) so there are ZERO hardcoded colors here either — the
+// terminal-mono look comes from the monospace font + an elevate() tint, not hex.
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-const TERMINAL_BG = '#0d1117';
-const TERMINAL_BORDER = '#30363d';
-const TERMINAL_TEXT = '#c9d1d9';
-const TERMINAL_ACCENT = '#3fb950';
+const CHROME_BG = elevate(16);
+const CHROME_BG_RAISED = elevate(24);
 
 const rootStyle: CSSProperties = { position: 'relative', minHeight: '100dvh' };
 const bannerStyle: CSSProperties = {
@@ -127,37 +139,37 @@ const bannerStyle: CSSProperties = {
   left: 0,
   right: 0,
   zIndex: 10000,
-  background: TERMINAL_BG,
-  color: TERMINAL_ACCENT,
+  background: CHROME_BG,
+  color: token.success,
   fontFamily: MONO,
   fontSize: 12,
   fontWeight: 600,
   textAlign: 'center',
   padding: '4px 8px',
   letterSpacing: 0.3,
-  borderBottom: `1px solid ${TERMINAL_BORDER}`,
+  borderBottom: `1px solid ${token.border}`,
 };
 const panelStyle: CSSProperties = {
   position: 'fixed',
   top: 28,
   left: 8,
   zIndex: 10000,
-  background: TERMINAL_BG,
-  color: TERMINAL_TEXT,
+  background: CHROME_BG,
+  color: token.dimmed,
   fontFamily: MONO,
   fontSize: 11,
   padding: '6px 10px',
-  borderRadius: 6,
-  border: `1px solid ${TERMINAL_BORDER}`,
+  borderRadius: radius.md,
+  border: `1px solid ${token.border}`,
   maxWidth: 220,
 };
-const summaryStyle: CSSProperties = { cursor: 'pointer', color: TERMINAL_ACCENT, letterSpacing: 0.3 };
+const summaryStyle: CSSProperties = { cursor: 'pointer', color: token.success, letterSpacing: 0.3 };
 const panelBodyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 };
 const btnStyle: CSSProperties = {
-  background: '#161b22',
-  color: TERMINAL_TEXT,
-  border: `1px solid ${TERMINAL_BORDER}`,
-  borderRadius: 4,
+  background: CHROME_BG_RAISED,
+  color: token.text,
+  border: `1px solid ${token.border}`,
+  borderRadius: radius.sm,
   fontFamily: MONO,
   fontSize: 11,
   padding: '3px 6px',

@@ -147,7 +147,10 @@ describe('submit', () => {
   });
 
   it('surfaces the friendly trust-gate message on a trust error (no crash)', async () => {
-    h.shared.append.mockRejectedValueOnce(new Error('FORBIDDEN: account must be 7 days old'));
+    // A BARE code carries no reason, so errors.ts falls back to the curated gate
+    // copy (a specific reason like "FORBIDDEN: account too new" would be surfaced
+    // verbatim instead — see classifyWriteError).
+    h.shared.append.mockRejectedValueOnce(new Error('FORBIDDEN'));
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText('No requests yet');
@@ -248,7 +251,8 @@ describe('voting', () => {
       items: [makeItem({ key: 'g1', title: 'Gated', count: 4 })],
       nextCursor: undefined,
     });
-    h.shared.vote.mockRejectedValueOnce(new Error('account too new to vote'));
+    // Bare code → the curated gate copy (see the submit trust-gate test above).
+    h.shared.vote.mockRejectedValueOnce(new Error('FORBIDDEN'));
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText('Gated');
