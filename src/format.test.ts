@@ -4,12 +4,14 @@ import type { SharedListItem } from '@civitai/blocks-react';
 
 import {
   authorLabel,
+  findSimilarRequests,
   isOverLimit,
   isOwnEntry,
   isWellFormedItem,
   lengthHint,
   relativeTime,
   sortItems,
+  titleSimilarity,
   BODY_MAX,
   TITLE_MAX,
 } from './format.js';
@@ -29,12 +31,14 @@ describe('authorLabel', () => {
   it('shows "you" for the viewer', () => {
     expect(authorLabel(42, 42)).toBe('you');
   });
-  it('shows "user #N" for others', () => {
-    expect(authorLabel(42, 7)).toBe('user #42');
+  it('shows a neutral "A Civitai member" for others (never a raw numeric id)', () => {
+    expect(authorLabel(42, 7)).toBe('A Civitai member');
+    // The un-resolvable label must not leak the internal numeric handle.
+    expect(authorLabel(42, 7)).not.toMatch(/#?\d/);
   });
-  it('shows "user #N" when the viewer is anonymous', () => {
-    expect(authorLabel(42, null)).toBe('user #42');
-    expect(authorLabel(42, undefined)).toBe('user #42');
+  it('shows "A Civitai member" when the viewer is anonymous', () => {
+    expect(authorLabel(42, null)).toBe('A Civitai member');
+    expect(authorLabel(42, undefined)).toBe('A Civitai member');
   });
 });
 
@@ -116,5 +120,52 @@ describe('length hints', () => {
     expect(isOverLimit('x'.repeat(TITLE_MAX), TITLE_MAX)).toBe(false);
     expect(isOverLimit('x'.repeat(TITLE_MAX + 1), TITLE_MAX)).toBe(true);
     expect(isOverLimit('x'.repeat(BODY_MAX + 1), BODY_MAX)).toBe(true);
+  });
+});
+
+describe('titleSimilarity', () => {
+  it('is 1 for the same meaningful tokens (ignoring case/punctuation/stopwords)', () => {
+    expect(titleSimilarity('Dark mode toggle', 'dark-mode toggle!')).toBe(1);
+  });
+  it('is high for a near-duplicate', () => {
+    expect(titleSimilarity('Add a dark mode', 'Dark mode toggle')).toBeGreaterThan(0.34);
+  });
+  it('is 0 when there is no meaningful overlap', () => {
+    expect(titleSimilarity('Prompt library app', 'Video export queue')).toBe(0);
+  });
+  it('is 0 when a side has only stopwords/short tokens', () => {
+    expect(titleSimilarity('the a an app', 'Dark mode toggle')).toBe(0);
+  });
+  it('is symmetric', () => {
+    expect(titleSimilarity('a b c', 'c b a')).toBe(titleSimilarity('c b a', 'a b c'));
+  });
+});
+
+describe('findSimilarRequests', () => {
+  const board = [
+    item({ key: 'dm', value: { title: 'Dark mode toggle' } }),
+    item({ key: 'pl', value: { title: 'Prompt library with tags' } }),
+    item({ key: 'vq', value: { title: 'Video export queue' } }),
+  ];
+
+  it('surfaces a near-duplicate already on the board, most-similar first', () => {
+    const out = findSimilarRequests('Add a dark mode', board);
+    expect(out.map((i) => i.key)).toContain('dm');
+    expect(out[0].key).toBe('dm');
+  });
+  it('returns nothing for an unrelated draft', () => {
+    expect(findSimilarRequests('A brand new music studio', board)).toEqual([]);
+  });
+  it('stays quiet for very short drafts (< 4 chars)', () => {
+    expect(findSimilarRequests('Dar', board)).toEqual([]);
+  });
+  it('caps the number of matches at the requested limit', () => {
+    const many = [
+      item({ key: 'a', value: { title: 'Prompt library tags' } }),
+      item({ key: 'b', value: { title: 'Prompt library folders' } }),
+      item({ key: 'c', value: { title: 'Prompt library search' } }),
+      item({ key: 'd', value: { title: 'Prompt library sync' } }),
+    ];
+    expect(findSimilarRequests('Prompt library export', many, 2)).toHaveLength(2);
   });
 });

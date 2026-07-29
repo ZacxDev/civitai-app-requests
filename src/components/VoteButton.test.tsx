@@ -24,6 +24,21 @@ describe('VoteButton a11y + interaction', () => {
     expect(btn).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('shows an explicit "Voted" affordance (check + label) only in the voted state', () => {
+    const { rerender } = render(<VoteButton count={5} voted={false} onClick={vi.fn()} />);
+    // Not voted: no voted indicator, count shows the bare number.
+    expect(screen.queryByTestId('voted-indicator')).toBeNull();
+    expect(screen.getByTestId('vote-count')).toHaveTextContent('5');
+    expect(screen.getByTestId('vote-count')).not.toHaveTextContent('Voted');
+
+    // Voted: a distinct check indicator appears and the label reads "Voted".
+    rerender(<VoteButton count={6} voted onClick={vi.fn()} />);
+    expect(screen.getByTestId('voted-indicator')).toBeInTheDocument();
+    expect(screen.getByTestId('vote-count')).toHaveTextContent('Voted');
+    // The count is still legible alongside the affordance.
+    expect(screen.getByTestId('vote-count')).toHaveTextContent('6');
+  });
+
   it('forwards a click when not busy', async () => {
     const onClick = vi.fn();
     const user = userEvent.setup();

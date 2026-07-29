@@ -333,6 +333,79 @@ describe('submit', () => {
   });
 });
 
+describe('submit affordances', () => {
+  it('Enter in the Title field submits the form (implicit submission)', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('No requests yet');
+    h.shared.list.mockClear();
+
+    const title = screen.getByTestId('title-input');
+    await user.type(title, 'Ship it with Enter{enter}');
+
+    // Enter submitted without a click on the button.
+    await waitFor(() =>
+      expect(h.shared.append).toHaveBeenCalledWith({ title: 'Ship it with Enter' }),
+    );
+  });
+
+  it('Enter inside the Details textarea does NOT submit (stays a newline)', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('No requests yet');
+
+    await user.type(screen.getByTestId('title-input'), 'Has details');
+    await user.type(screen.getByTestId('body-input'), 'line one{enter}line two');
+    // The textarea Enter did not fire a submit.
+    expect(h.shared.append).not.toHaveBeenCalled();
+    expect(screen.getByTestId('body-input')).toHaveValue('line one\nline two');
+  });
+
+  it('nudges about similar already-posted requests without blocking the post', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [
+        makeItem({ key: 'dm', title: 'Dark mode toggle', count: 4 }),
+        makeItem({ key: 'vq', title: 'Video export queue', count: 1 }),
+      ],
+      nextCursor: undefined,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Dark mode toggle');
+
+    // No nudge before typing.
+    expect(screen.queryByTestId('similar-nudge')).toBeNull();
+
+    await user.type(screen.getByTestId('title-input'), 'Please add a dark mode');
+
+    // The near-duplicate surfaces; the unrelated row does not.
+    const nudge = await screen.findByTestId('similar-nudge');
+    const items = within(nudge).getAllByTestId('similar-item');
+    expect(items.map((i) => i.textContent)).toContain('Dark mode toggle');
+    expect(items.map((i) => i.textContent)).not.toContain('Video export queue');
+
+    // It is a SOFT nudge — Post stays enabled and still works.
+    expect(screen.getByTestId('submit-btn')).not.toBeDisabled();
+    await user.click(screen.getByTestId('submit-btn'));
+    await waitFor(() =>
+      expect(h.shared.append).toHaveBeenCalledWith({ title: 'Please add a dark mode' }),
+    );
+  });
+});
+
+describe('footer copy', () => {
+  it('states multi-vote + the review loop, and drops the ambiguous "one vote per person"', async () => {
+    render(<App />);
+    await screen.findByText('No requests yet');
+    // The disambiguated multi-vote copy.
+    expect(screen.getByText(/one vote each/)).toBeInTheDocument();
+    // The expectation-setting feedback line so the board doesn't read as a void.
+    expect(screen.getByText(/The team reviews the top requests\./)).toBeInTheDocument();
+    // The old ambiguous line is gone.
+    expect(screen.queryByText(/One vote per person/)).toBeNull();
+  });
+});
+
 describe('voting', () => {
   it('votes with optimistic count then reconciles with the returned total', async () => {
     h.shared.list.mockResolvedValue({
@@ -463,7 +536,7 @@ describe('edit own request', () => {
 });
 
 describe('withdraw', () => {
-  it('shows withdraw only on the viewer\'s own rows and removes on click', async () => {
+  it('shows withdraw only on the viewer\'s own rows and removes after confirming', async () => {
     h.shared.list.mockResolvedValue({
       items: [
         makeItem({ key: 'mine', title: 'My idea', authorUserId: 7777, count: 1 }),
@@ -481,10 +554,53 @@ describe('withdraw', () => {
     expect(within(mineRow).getByTestId('withdraw-btn')).toBeInTheDocument();
     expect(within(theirsRow).queryByTestId('withdraw-btn')).toBeNull();
 
+    // Clicking Withdraw does NOT delete immediately — it opens a confirm dialog.
     await user.click(within(mineRow).getByTestId('withdraw-btn'));
+    expect(h.shared.withdraw).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByTestId('withdraw-confirm')).toBeInTheDocument();
+
+    // Confirming performs the destructive delete.
+    await user.click(within(dialog).getByTestId('withdraw-confirm-btn'));
     expect(h.shared.withdraw).toHaveBeenCalledWith('mine');
     await waitFor(() => expect(screen.queryByText('My idea')).toBeNull());
     expect(screen.getByText('Their idea')).toBeInTheDocument();
+  });
+
+  it('the confirm dialog names the vote count and Cancel aborts (no delete)', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'mine', title: 'My idea', authorUserId: 7777, count: 12 })],
+      nextCursor: undefined,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('My idea');
+
+    await user.click(screen.getByTestId('withdraw-btn'));
+    const dialog = screen.getByRole('dialog');
+    // The dialog surfaces the count so the cost is explicit before deleting.
+    expect(within(dialog).getByText(/12 votes/)).toBeInTheDocument();
+
+    // Cancel closes the dialog and performs NO delete.
+    await user.click(within(dialog).getByTestId('withdraw-cancel-btn'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(h.shared.withdraw).not.toHaveBeenCalled();
+    // The request is still on the board.
+    expect(screen.getByText('My idea')).toBeInTheDocument();
+  });
+
+  it('the confirm dialog singularizes a single vote', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'mine', title: 'My idea', authorUserId: 7777, count: 1 })],
+      nextCursor: undefined,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('My idea');
+    await user.click(screen.getByTestId('withdraw-btn'));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/1 vote\b/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/1 votes/)).toBeNull();
   });
 });
 
