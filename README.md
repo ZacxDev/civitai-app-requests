@@ -15,22 +15,41 @@ the **shared-storage** platform:
 
 - **`useSharedStorage()`** — the per-app, CROSS-USER store. `append()` a
   `{ title, body? }` idea, `list()` the board (newest-first, cursor-paged),
-  `vote()` / `unvote()` (up-only, one per user, server-enforced), `withdraw()`
+  `vote()` / `unvote()` (up-only, one per user, server-enforced), `update()`
+  your own entry in place (fixes a typo without losing votes), `withdraw()`
   your own entry.
 - **`useAppStorage()`** — the per-viewer KV, used to remember which entries the
   viewer voted for (the shared API doesn't expose "did I vote"), reconciled with
   the counts `vote()` / `unvote()` return.
-- **`user:read:self`** — to show the viewer (own entries get a withdraw
-  affordance; the author label shows `you` vs `user #N`).
+- **`user:read:self`** — to show the viewer (own entries get edit + withdraw
+  affordances; the author label shows `you` vs `user #N`).
+- **`useBlockAnalytics()`** — fire-and-forget submit / vote / withdraw / edit /
+  sort / error-boundary events to the host's analytics pipeline.
 
-No Buzz, no generation. Scopes: `apps:storage:read`, `apps:storage:write`
-(cover both the shared store and the per-viewer KV), `user:read:self`.
+No Buzz, no generation. Scopes (must match `block.manifest.json`):
+`apps:storage:read`, `apps:storage:write` (the per-viewer KV),
+`apps:storage:shared:read`, `apps:storage:shared:write` (the cross-user board),
+and `user:read:self`.
+
+**Sorting.** The board defaults to **Newest** (the server's truthful order).
+**Top** ranks by vote count; because the server exposes no rank/order param, Top
+runs a *bounded whole-board scan* (pages forward up to a cap) so a high-vote item
+on a later page still rises — and says so when the board exceeds the scan window.
+A server-side ranked read of the shared store is the proper upstream fix.
+
+**Resilience.** The app root wraps a recoverable error boundary inside a
+`BlockGate`, so a single malformed row can't white-screen the iframe (a **Try
+again** recovers), and a direct load of `app-requests.civit.ai` degrades to an
+"Open on Civitai" landing.
 
 The server enforces a min-trust gate (account age ≥7d, verified, not muted,
-onboarded) on writes/votes and moderates `append` content (title ≤200, body
-≤4KB, HTML stripped, NSFW/minor blocked). The UI surfaces a friendly message on
-the trust gate and the server's own message on a content rejection, and never
-crashes on a rejected write/vote.
+onboarded) on writes/votes and moderates `append` / `update` content (title
+≤200, body ≤4KB, HTML stripped, NSFW/minor blocked) — moderation is
+server-authoritative. The UI surfaces a friendly message on the trust gate and
+the server's own message on a content rejection (inline for form errors, a Toast
+for async vote/edit/withdraw errors), and never crashes on a rejected
+write/vote/edit. User text is rendered as escaped React children (no HTML
+injection).
 
 ## Develop
 
@@ -53,8 +72,10 @@ npm run build   # tsc --noEmit && vite build → dist/
 
 Tests mock the SDK storage hooks for deterministic coverage of every flow
 (submit → append + refresh, list + load-more, vote/unvote optimistic +
-reconcile, one-vote-per-user, own-row withdraw, trust-gate + content errors,
-anon read-only), plus an e2e suite that drives the real `<App/>` against the SDK
+reconcile, one-vote-per-user, own-row edit via `update()` + own-row withdraw,
+Top cross-page ranking, trust-gate + content errors, SegmentedControl tablist
+a11y, `--civitai-color-*` token-render smoke, recoverable error boundary, anon
+read-only), plus an e2e suite that drives the real `<App/>` against the SDK
 mock host over the actual postMessage transport.
 
 ## Submit
