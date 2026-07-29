@@ -5,14 +5,17 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ErrorInfo,
 } from 'react';
 
 import {
   useAppStorage,
+  useBlockAnalytics,
   useBlockContext,
   useBlockResize,
   useRequestSignIn,
   useSharedStorage,
+  type SharedAppendValue,
   type SharedListItem,
 } from '@civitai/blocks-react';
 import {
@@ -22,13 +25,20 @@ import {
   Card,
   Group,
   Loader,
+  SegmentedControl,
   Stack,
   Textarea,
   TextInput,
   injectBlocksStyles,
 } from '@civitai/blocks-react/ui';
+// Toast lives in the design-system's components pack, not in blocks-react/ui —
+// pulled in solely for the async-error surface (its provider renders an
+// aria-live region for free). `injectStyles` themes it with the same
+// `--civitai-color-*` tokens the /ui pack + @civitai/theme use.
+import { ToastProvider, injectStyles, useToast } from '@civitai/components-react';
 
 import { classifyWriteError } from './errors.js';
+import { RootBoundary } from './RootBoundary.js';
 import {
   authorLabel,
   BODY_MAX,
@@ -64,18 +74,67 @@ const VOTED_STORAGE_KEY = 'voted-request-keys';
 // How many entries per list page.
 const PAGE_SIZE = 25;
 
+// The server's `list()` is newest-first only — there is NO server-side rank/order
+// param (see the report's "Top ranking" note). To make "Top" HONEST across pages
+// we bounded-scan the board when it's selected: page forward until the cursor is
+// exhausted OR we've pulled this many pages, then rank the whole loaded window by
+// vote count. For a community request board this ceiling comfortably covers the
+// realistic board size; if it's ever exceeded we say so ("Top" note) instead of
+// silently ranking only part of the board.
+const TOP_SCAN_MAX_PAGES = 8;
+
 /**
  * App Requests — a first-party Civitai App Block. A community voting board where
  * anyone submits an idea for a new app/feature and up-votes others'. Built
  * entirely on the cross-user SHARED storage platform (`useSharedStorage`) plus
  * the per-viewer KV (`useAppStorage`) for the local voted-set. No Buzz, no
- * generation — read + write + vote only.
+ * generation — read + write + vote + edit only.
+ *
+ * The exported root wires the cross-cutting shells the board itself shouldn't
+ * own: a {@link ToastProvider} (async-error surface + aria-live region) and a
+ * recoverable {@link RootBoundary} so a malformed row can't white-screen the
+ * iframe. {@link Board} is the app.
  */
 export function App() {
+  // Inject BOTH design-system style sheets once: the /ui pack (Card/Button/…)
+  // and the components pack (Toast). Both are idempotent + resolve against the
+  // same `--civitai-color-*` tokens `@civitai/theme` sets (see theme.ts).
+  const injectedRef = useRef(false);
+  if (!injectedRef.current) {
+    injectBlocksStyles();
+    injectStyles();
+    injectedRef.current = true;
+  }
+
+  const { track } = useBlockAnalytics();
+  const onBoundaryError = useCallback(
+    (error: Error, info: ErrorInfo) => {
+      // Fire-and-forget: surface the white-screen-averted event so a broken row
+      // is visible in analytics rather than silently swallowed.
+      track('error_boundary', {
+        message: error.message,
+        componentStack: info.componentStack ?? undefined,
+      });
+    },
+    [track],
+  );
+
+  return (
+    <ToastProvider label="App Requests notifications">
+      <RootBoundary onError={onBoundaryError}>
+        <Board />
+      </RootBoundary>
+    </ToastProvider>
+  );
+}
+
+function Board() {
   const { ready, viewer, theme } = useBlockContext();
   const shared = useSharedStorage();
   const storage = useAppStorage();
   const { requestSignIn } = useRequestSignIn();
+  const { track } = useBlockAnalytics();
+  const toast = useToast();
 
   const rootRef = useRef<HTMLDivElement>(null);
   useBlockResize(rootRef);
@@ -99,28 +158,24 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
-  const [sort, setSort] = useState<SortMode>('top');
+  // Default to Newest — an HONEST, server-truthful order. "Top" opts into a
+  // bounded whole-board scan (below) so it isn't silently ranking one page.
+  const [sort, setSort] = useState<SortMode>('newest');
+  // True when a "Top" scan stopped at the page cap — i.e. the board is larger
+  // than the scan window, so the ranking covers only the first N. Surfaced as a
+  // note so "Top" is never silently partial.
+  const [topPartial, setTopPartial] = useState(false);
+  const [scanningTop, setScanningTop] = useState(false);
 
   // Key of the request the viewer just posted this session — pinned to the top
-  // of the board regardless of the active sort so it's immediately visible. A
-  // brand-new request has 0 votes, so under "Top" it would otherwise sort below
-  // the fold and look like "nothing happened". Cleared when the viewer picks an
-  // explicit sort.
+  // of the board regardless of the active sort so it's immediately visible.
+  // Cleared when the viewer picks an explicit sort.
   const [justPostedKey, setJustPostedKey] = useState<string | null>(null);
 
   // The viewer's own up-votes (keys), hydrated from App Storage. `pending` holds
   // keys with an in-flight vote toggle so a double-click can't double-count.
   const [votedKeys, setVotedKeys] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState<Set<string>>(new Set());
-
-  // Errors from a vote/withdraw action (distinct from list + submit errors).
-  const [actionError, setActionError] = useState<string | null>(null);
-
-  const injectedRef = useRef(false);
-  if (!injectedRef.current) {
-    injectBlocksStyles();
-    injectedRef.current = true;
-  }
 
   // Load a fresh first page of the board.
   const refreshList = useCallback(async () => {
@@ -154,6 +209,42 @@ export function App() {
       setLoadingMore(false);
     }
   }, [shared, nextCursor, loadingMore]);
+
+  /**
+   * Bounded whole-board scan for "Top". The server has no rank param, so to rank
+   * across pages we page forward from the current cursor until it's exhausted or
+   * we hit {@link TOP_SCAN_MAX_PAGES}. `sortItems(…, 'top')` then ranks the full
+   * loaded window. Sets `topPartial` when we stopped at the cap (board bigger
+   * than the scan window) so the UI can say the ranking is over the first N.
+   */
+  const scanBoardForTop = useCallback(async () => {
+    setScanningTop(true);
+    setListError(null);
+    try {
+      let cursor = nextCursor;
+      let pages = 0;
+      const fetched: SharedListItem[] = [];
+      const seen = new Set(items.map((i) => i.key));
+      while (cursor && pages < TOP_SCAN_MAX_PAGES) {
+        const res = await shared.list({ limit: PAGE_SIZE, cursor });
+        for (const it of res.items) {
+          if (!seen.has(it.key)) {
+            seen.add(it.key);
+            fetched.push(it);
+          }
+        }
+        cursor = res.nextCursor;
+        pages += 1;
+      }
+      if (fetched.length > 0) setItems((prev) => [...prev, ...fetched]);
+      setNextCursor(cursor);
+      setTopPartial(Boolean(cursor)); // still more pages beyond the cap
+    } catch (err) {
+      setListError(classifyWriteError(err).message);
+    } finally {
+      setScanningTop(false);
+    }
+  }, [shared, nextCursor, items]);
 
   // Initial load once the host context is ready: hydrate the voted-set from the
   // per-viewer KV (empty for anon), then fetch the board.
@@ -189,12 +280,22 @@ export function App() {
     setItems((prev) => prev.map((i) => (i.key === key ? { ...i, count } : i)));
   }, []);
 
+  // Surface an async ACTION error (vote/withdraw/edit) as a toast — the
+  // ToastProvider host is an aria-live region, so it's announced. Inline form +
+  // list errors keep their contextual <Alert>s.
+  const showActionError = useCallback(
+    (err: unknown) => {
+      toast.show({ message: classifyWriteError(err).message, color: 'error', urgent: true });
+    },
+    [toast],
+  );
+
   /**
    * Toggle the viewer's up-vote on an entry. Optimistic: flip the local vote
    * state + count immediately, then reconcile with the count vote()/unvote()
    * returns. A `pending` guard drops overlapping clicks so a double-click is a
    * single net request (one-vote-per-user is also server-enforced). Rolls back
-   * + surfaces a friendly message on failure (e.g. the min-trust gate).
+   * + surfaces a friendly toast on failure (e.g. the min-trust gate).
    */
   const toggleVote = useCallback(
     async (item: SharedListItem) => {
@@ -228,7 +329,7 @@ export function App() {
           persistVoted(next);
           return next;
         });
-        setActionError(null);
+        track(wasVoted ? 'request_unvoted' : 'request_voted', { key });
       } catch (err) {
         // Roll back the optimistic flip.
         setCount(key, prevCount);
@@ -238,7 +339,7 @@ export function App() {
           else next.delete(key);
           return next;
         });
-        setActionError(classifyWriteError(err).message);
+        showActionError(err);
       } finally {
         setPending((p) => {
           const next = new Set(p);
@@ -247,7 +348,7 @@ export function App() {
         });
       }
     },
-    [isAnon, requestSignIn, pending, votedKeys, shared, setCount, persistVoted],
+    [isAnon, requestSignIn, pending, votedKeys, shared, setCount, persistVoted, track, showActionError],
   );
 
   const withdraw = useCallback(
@@ -264,9 +365,9 @@ export function App() {
           persistVoted(next);
           return next;
         });
-        setActionError(null);
+        track('request_withdrawn', { key: item.key });
       } catch (err) {
-        setActionError(classifyWriteError(err).message);
+        showActionError(err);
       } finally {
         setPending((p) => {
           const next = new Set(p);
@@ -275,17 +376,53 @@ export function App() {
         });
       }
     },
-    [pending, shared, persistVoted],
+    [pending, shared, persistVoted, track, showActionError],
+  );
+
+  /**
+   * In-place edit of the viewer's OWN request via `shared.update()` — fixes the
+   * old typo-forces-withdraw-and-repost flow that lost the entry's votes. Author-
+   * scoped server-side; preserves the key + votes + any opaque `data` blob. Only
+   * the moderated `{ title, body }` text changes (same content belt as append).
+   * Returns whether the update landed so the row can exit edit mode on success.
+   */
+  const editRequest = useCallback(
+    async (item: SharedListItem, next: { title: string; body?: string }): Promise<boolean> => {
+      const title = next.title.trim();
+      const body = next.body && next.body.trim() ? next.body.trim() : undefined;
+      const value: SharedAppendValue = {
+        title,
+        ...(body ? { body } : {}),
+        // Preserve the opaque app-owned payload if the row carried one.
+        ...(item.value.data !== undefined ? { data: item.value.data } : {}),
+      };
+      try {
+        await shared.update(item.key, value);
+        setItems((prev) =>
+          prev.map((i) =>
+            i.key === item.key
+              ? { ...i, value: { ...i.value, title, body }, updatedAt: new Date() }
+              : i,
+          ),
+        );
+        track('request_edited', { key: item.key });
+        return true;
+      } catch (err) {
+        showActionError(err);
+        return false;
+      }
+    },
+    [shared, track, showActionError],
   );
 
   const onSubmitted = useCallback(
     async (posted: { key: string; title: string; body?: string }) => {
       // Optimistically prepend the just-posted request so it renders instantly,
-      // before the refetch round-trips. The item is pinned to the top (via
-      // `justPostedKey`) so the active sort can't bury the fresh 0-vote entry.
-      // `refreshList()` below is the source of truth and supersedes this row
-      // with the authoritative server one (same host-minted key → de-duped).
+      // before the refetch round-trips. Pinned to the top (via `justPostedKey`)
+      // so the active sort can't bury a fresh 0-vote entry. `refreshList()` is
+      // the source of truth and supersedes this row (same host-minted key).
       setJustPostedKey(posted.key);
+      track('request_submitted', { key: posted.key });
       if (viewerId != null) {
         const now = new Date();
         const optimistic: SharedListItem = {
@@ -303,14 +440,22 @@ export function App() {
       // Reconcile with the server (source of truth for count + ordering).
       await refreshList();
     },
-    [refreshList, viewerId],
+    [refreshList, viewerId, track],
   );
 
-  // Clears the just-posted pin when the viewer deliberately re-sorts the board.
-  const handleSortChange = useCallback((s: SortMode) => {
-    setJustPostedKey(null);
-    setSort(s);
-  }, []);
+  // Re-sort. Clears the just-posted pin (a deliberate re-sort), fires analytics,
+  // and — for "Top" — kicks off the bounded whole-board scan so the ranking is
+  // over the full board, not just the first page.
+  const handleSortChange = useCallback(
+    (s: SortMode) => {
+      setJustPostedKey(null);
+      setSort(s);
+      track('sort_changed', { sort: s });
+      if (s === 'top') void scanBoardForTop();
+      else setTopPartial(false);
+    },
+    [track, scanBoardForTop],
+  );
 
   const sorted = useMemo(() => {
     const base = sortItems(items, sort);
@@ -337,16 +482,16 @@ export function App() {
             </div>
           )}
 
-          {actionError && (
-            <Alert color="warning" title="Couldn't do that">
-              {actionError}
-            </Alert>
-          )}
-
           <Group justify="space-between" align="center" gap={10} wrap>
             <strong style={sectionTitle}>Requests</strong>
             <SortToggle sort={sort} onChange={handleSortChange} />
           </Group>
+
+          {sort === 'top' && topPartial && (
+            <span style={metaText} role="note">
+              Ranked across the first {TOP_SCAN_MAX_PAGES * PAGE_SIZE} requests — the board is large.
+            </span>
+          )}
 
           {loading ? (
             <Group gap={10} align="center" role="status" aria-live="polite">
@@ -386,6 +531,12 @@ export function App() {
             />
           ) : (
             <Stack gap={10}>
+              {(scanningTop || loadingMore) && sort === 'top' && (
+                <Group gap={8} align="center" role="status" aria-live="polite">
+                  <Loader size="sm" />
+                  <span style={metaText}>Ranking the whole board…</span>
+                </Group>
+              )}
               {sorted.map((item) => (
                 <RequestRow
                   key={item.key}
@@ -395,6 +546,7 @@ export function App() {
                   busy={pending.has(item.key)}
                   onVote={() => void toggleVote(item)}
                   onWithdraw={() => void withdraw(item)}
+                  onEdit={(next) => editRequest(item, next)}
                 />
               ))}
               {nextCursor && (
@@ -537,16 +689,18 @@ function SubmitForm({
           </div>
         </div>
 
-        {error && (
-          <Alert color="warning" title="Couldn't post that">
-            {error}
-          </Alert>
-        )}
-        {justPosted && !error && (
-          <Alert color="success" title="Posted">
-            Thanks — your request is on the board.
-          </Alert>
-        )}
+        <div aria-live="polite">
+          {error && (
+            <Alert color="warning" title="Couldn't post that">
+              {error}
+            </Alert>
+          )}
+          {justPosted && !error && (
+            <Alert color="success" title="Posted">
+              Thanks — your request is on the board.
+            </Alert>
+          )}
+        </div>
 
         <Group justify="flex-end">
           <Button
@@ -564,7 +718,15 @@ function SubmitForm({
   );
 }
 
-/** One request row: votes + title/body + author/time + (own) withdraw. */
+// NOTE — per-row user REPORTING is intentionally NOT wired here. The published
+// SDK (@civitai/app-sdk 0.28 / @civitai/blocks-react 0.37) exposes NO report
+// method on `useSharedStorage()` and the postMessage protocol has no
+// `SHARED_REPORT` message — so there is no host bridge to submit a report, and
+// this sandbox (allow-scripts allow-forms, no allow-same-origin) forbids a raw
+// fetch. Content is still moderated server-side at write time (trust-gate +
+// NSFW/minor block + HTML strip). A `report()` on the shared-storage contract is
+// the owed upstream fix; wire a "Report" affordance on each row once it lands.
+/** One request row: votes + title/body + author/time + (own) edit / withdraw. */
 function RequestRow({
   item,
   viewerId,
@@ -572,6 +734,7 @@ function RequestRow({
   busy,
   onVote,
   onWithdraw,
+  onEdit,
 }: {
   item: SharedListItem;
   viewerId: number | null;
@@ -579,43 +742,138 @@ function RequestRow({
   busy: boolean;
   onVote: () => void;
   onWithdraw: () => void;
+  onEdit: (next: { title: string; body?: string }) => Promise<boolean>;
 }) {
   const own = isOwnEntry(item.authorUserId, viewerId);
+  const [editing, setEditing] = useState(false);
+
   return (
     <Card padding="md" style={cardStyle} data-testid="request-row" data-key={item.key}>
       <Group gap={14} align="flex-start" wrap={false}>
         <VoteButton count={item.count} voted={voted} busy={busy} onClick={onVote} />
 
         <Stack gap={6} style={{ flex: '1 1 260px', minWidth: 0 }}>
-          <span style={requestTitleStyle}>{item.value.title}</span>
-          {item.value.body && <p style={requestBodyStyle}>{item.value.body}</p>}
-          <Group gap={8} align="center" wrap>
-            <span style={metaText}>{authorLabel(item.authorUserId, viewerId)}</span>
-            <span style={metaDotStyle} aria-hidden>
-              ·
-            </span>
-            <span style={metaText}>{relativeTime(item.createdAt)}</span>
-            {own && (
-              <>
+          {editing ? (
+            <EditForm
+              item={item}
+              onCancel={() => setEditing(false)}
+              onSave={async (next) => {
+                const ok = await onEdit(next);
+                if (ok) setEditing(false);
+                return ok;
+              }}
+            />
+          ) : (
+            <>
+              <span style={requestTitleStyle}>{item.value.title}</span>
+              {item.value.body && <p style={requestBodyStyle}>{item.value.body}</p>}
+              <Group gap={8} align="center" wrap>
+                <span style={metaText}>{authorLabel(item.authorUserId, viewerId)}</span>
                 <span style={metaDotStyle} aria-hidden>
                   ·
                 </span>
-                <Button
-                  variant="subtle"
-                  size="sm"
-                  color="error"
-                  onClick={onWithdraw}
-                  disabled={busy}
-                  data-testid="withdraw-btn"
-                >
-                  Withdraw
-                </Button>
-              </>
-            )}
-          </Group>
+                <span style={metaText}>{relativeTime(item.createdAt)}</span>
+                {own && (
+                  <>
+                    <span style={metaDotStyle} aria-hidden>
+                      ·
+                    </span>
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      onClick={() => setEditing(true)}
+                      disabled={busy}
+                      data-testid="edit-btn"
+                    >
+                      Edit
+                    </Button>
+                    <span style={metaDotStyle} aria-hidden>
+                      ·
+                    </span>
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      color="error"
+                      onClick={onWithdraw}
+                      disabled={busy}
+                      data-testid="withdraw-btn"
+                    >
+                      Withdraw
+                    </Button>
+                  </>
+                )}
+              </Group>
+            </>
+          )}
         </Stack>
       </Group>
     </Card>
+  );
+}
+
+/** Inline edit form for the author's own request. */
+function EditForm({
+  item,
+  onCancel,
+  onSave,
+}: {
+  item: SharedListItem;
+  onCancel: () => void;
+  onSave: (next: { title: string; body?: string }) => Promise<boolean>;
+}) {
+  const [title, setTitle] = useState(item.value.title);
+  const [body, setBody] = useState(item.value.body ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const trimmedTitle = title.trim();
+  const titleOver = isOverLimit(title, TITLE_MAX);
+  const bodyOver = isOverLimit(body, BODY_MAX);
+  const canSave = !saving && trimmedTitle.length > 0 && !titleOver && !bodyOver;
+
+  async function save() {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      await onSave({ title, body: body.trim() ? body : undefined });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Stack gap={8} data-testid="edit-form">
+      <TextInput
+        label="Title"
+        value={title}
+        maxLength={TITLE_MAX + 40}
+        onChange={(e) => setTitle(e.currentTarget.value)}
+        error={titleOver ? `Title must be ${TITLE_MAX} characters or fewer` : undefined}
+        data-testid="edit-title-input"
+      />
+      <Textarea
+        label="Details (optional)"
+        value={body}
+        rows={3}
+        onChange={(e) => setBody(e.currentTarget.value)}
+        error={bodyOver ? `Details must be ${BODY_MAX} characters or fewer` : undefined}
+        data-testid="edit-body-input"
+      />
+      <Group justify="flex-end" gap={8}>
+        <Button size="sm" variant="subtle" onClick={onCancel} disabled={saving} data-testid="edit-cancel-btn">
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          color="primary"
+          loading={saving}
+          disabled={!canSave}
+          onClick={() => void save()}
+          data-testid="edit-save-btn"
+        >
+          Save
+        </Button>
+      </Group>
+    </Stack>
   );
 }
 
@@ -626,27 +884,20 @@ function SortToggle({
   sort: SortMode;
   onChange: (s: SortMode) => void;
 }) {
+  // SegmentedControl gives role="tablist" + role="tab" + aria-selected + roving
+  // ArrowLeft/Right for free — the a11y contract the old Group-of-Buttons lacked.
   return (
-    <Group gap={6} align="center" role="group" aria-label="Sort requests" wrap={false}>
-      <Button
-        size="sm"
-        variant={sort === 'top' ? 'filled' : 'subtle'}
-        onClick={() => onChange('top')}
-        aria-pressed={sort === 'top'}
-        data-testid="sort-top"
-      >
-        Top
-      </Button>
-      <Button
-        size="sm"
-        variant={sort === 'newest' ? 'filled' : 'subtle'}
-        onClick={() => onChange('newest')}
-        aria-pressed={sort === 'newest'}
-        data-testid="sort-newest"
-      >
-        Newest
-      </Button>
-    </Group>
+    <SegmentedControl
+      aria-label="Sort requests"
+      size="sm"
+      value={sort}
+      onChange={(v) => onChange(v as SortMode)}
+      data-testid="sort-control"
+      data={[
+        { value: 'top', label: 'Top' },
+        { value: 'newest', label: 'Newest' },
+      ]}
+    />
   );
 }
 
@@ -681,8 +932,8 @@ function BulbIcon(): React.JSX.Element {
   );
 }
 
-// ---- styles (theme-aware via the @civitai/theme `--civitai-*` tokens set by
-// data-theme; see ./theme.ts). Zero hardcoded colors. ----
+// ---- styles (theme-aware via the @civitai/theme `--civitai-color-*` tokens set
+// by data-theme; see ./theme.ts). Zero hardcoded colors. ----
 
 const h1Style: CSSProperties = {
   fontSize: 19,

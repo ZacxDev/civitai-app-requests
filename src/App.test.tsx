@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   shared: {
     list: vi.fn(),
     append: vi.fn(),
+    update: vi.fn(),
     vote: vi.fn(),
     unvote: vi.fn(),
     withdraw: vi.fn(),
@@ -31,6 +32,7 @@ const h = vi.hoisted(() => ({
     getQuota: vi.fn(),
   },
   requestSignIn: vi.fn(),
+  track: vi.fn(),
 }));
 
 vi.mock('@civitai/blocks-react', () => ({
@@ -38,6 +40,7 @@ vi.mock('@civitai/blocks-react', () => ({
   useSharedStorage: () => h.shared,
   useAppStorage: () => h.storage,
   useRequestSignIn: () => ({ requestSignIn: h.requestSignIn }),
+  useBlockAnalytics: () => ({ track: h.track }),
   useBlockResize: () => {},
   getTransport: () => ({}),
 }));
@@ -81,27 +84,49 @@ beforeEach(() => {
   h.storage.set.mockResolvedValue({ ok: true });
   h.shared.list.mockResolvedValue({ items: [], nextCursor: undefined });
   h.shared.append.mockResolvedValue({ key: 'new-key' });
+  h.shared.update.mockResolvedValue(undefined);
   h.shared.vote.mockResolvedValue(1);
   h.shared.unvote.mockResolvedValue(0);
   h.shared.withdraw.mockResolvedValue({ ok: true, deleted: true });
 });
 
 describe('board rendering', () => {
-  it('renders the list newest/top and the header count', async () => {
+  it('renders newest-first by default and shows the header count', async () => {
     h.shared.list.mockResolvedValue({
       items: [
-        makeItem({ key: 'a', title: 'Alpha idea', count: 2 }),
-        makeItem({ key: 'b', title: 'Beta idea', count: 9 }),
+        // Server returns newest-first; `older` is older than `newer`.
+        makeItem({ key: 'newer', title: 'Newer idea', count: 2, createdAt: new Date('2026-05-10T00:00:00Z') }),
+        makeItem({ key: 'older', title: 'Older idea', count: 9, createdAt: new Date('2026-05-01T00:00:00Z') }),
       ],
       nextCursor: undefined,
     });
     render(<App />);
-    expect(await screen.findByText('Alpha idea')).toBeInTheDocument();
-    expect(screen.getByText('Beta idea')).toBeInTheDocument();
-    // Default sort is "top" → Beta (9) before Alpha (2).
+    expect(await screen.findByText('Newer idea')).toBeInTheDocument();
+    expect(screen.getByText('Older idea')).toBeInTheDocument();
+    // Default sort is "newest" → Newer (more recent) before Older, even though
+    // Older has more votes.
     const rows = screen.getAllByTestId('request-row');
-    expect(within(rows[0]).getByText('Beta idea')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('Newer idea')).toBeInTheDocument();
     expect(screen.getByText('2 ideas')).toBeInTheDocument();
+  });
+
+  it('the sort control is an accessible tablist (roles + aria-selected)', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 's1', title: 'Sortable' })],
+      nextCursor: undefined,
+    });
+    render(<App />);
+    await screen.findByText('Sortable');
+
+    const tablist = screen.getByTestId('sort-control');
+    expect(tablist).toHaveAttribute('role', 'tablist');
+    const tabs = within(tablist).getAllByRole('tab');
+    expect(tabs).toHaveLength(2);
+    // Default sort = newest → the Newest tab is selected, Top is not.
+    const top = tabs.find((t) => t.textContent === 'Top')!;
+    const newest = tabs.find((t) => t.textContent === 'Newest')!;
+    expect(newest).toHaveAttribute('aria-selected', 'true');
+    expect(top).toHaveAttribute('aria-selected', 'false');
   });
 
   it('shows the empty state when there are no requests', async () => {
@@ -121,6 +146,33 @@ describe('board rendering', () => {
 
     expect(await screen.findByText('Page two')).toBeInTheDocument();
     expect(h.shared.list).toHaveBeenLastCalledWith({ limit: 25, cursor: 'cur-1' });
+  });
+
+  it('"Top" ranks ACROSS pages: a high-vote item on page 2 rises above page 1', async () => {
+    // page 1: a low-vote item + more pages; page 2: a high-vote item.
+    h.shared.list
+      .mockResolvedValueOnce({
+        items: [makeItem({ key: 'p1', title: 'Low vote page 1', count: 1 })],
+        nextCursor: 'cur-1',
+      })
+      .mockResolvedValueOnce({
+        items: [makeItem({ key: 'p2', title: 'High vote page 2', count: 50 })],
+        nextCursor: undefined,
+      });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Low vote page 1');
+    // Page-2 item isn't loaded yet under the default newest sort.
+    expect(screen.queryByText('High vote page 2')).toBeNull();
+
+    // Select "Top" → the bounded whole-board scan pulls page 2, then ranks.
+    const tablist = screen.getByTestId('sort-control');
+    await user.click(within(tablist).getAllByRole('tab').find((t) => t.textContent === 'Top')!);
+
+    expect(await screen.findByText('High vote page 2')).toBeInTheDocument();
+    const rows = screen.getAllByTestId('request-row');
+    // The high-vote page-2 item now ranks first — the cross-page correctness fix.
+    expect(within(rows[0]).getByText('High vote page 2')).toBeInTheDocument();
   });
 });
 
@@ -146,10 +198,23 @@ describe('submit', () => {
     expect(await screen.findByText('Posted')).toBeInTheDocument();
   });
 
-  it('surfaces the friendly trust-gate message on a trust error (no crash)', async () => {
-    // A BARE code carries no reason, so errors.ts falls back to the curated gate
-    // copy (a specific reason like "FORBIDDEN: account too new" would be surfaced
-    // verbatim instead — see classifyWriteError).
+  it('surfaces the server\'s specific trust-gate reason on a trust error (no crash)', async () => {
+    h.shared.append.mockRejectedValueOnce(new Error('FORBIDDEN: account must be 7 days old'));
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('No requests yet');
+
+    await user.type(screen.getByTestId('title-input'), 'Idea');
+    await user.click(screen.getByTestId('submit-btn'));
+
+    // The app surfaces the server's SPECIFIC reason verbatim (see errors.ts),
+    // not a canned line — so a too-new account isn't mis-told something else.
+    expect(await screen.findByText('account must be 7 days old')).toBeInTheDocument();
+    // Still alive — the form is present.
+    expect(screen.getByTestId('submit-btn')).toBeInTheDocument();
+  });
+
+  it('falls back to the canned gate copy when the host gives only a bare code', async () => {
     h.shared.append.mockRejectedValueOnce(new Error('FORBIDDEN'));
     const user = userEvent.setup();
     render(<App />);
@@ -159,8 +224,6 @@ describe('submit', () => {
     await user.click(screen.getByTestId('submit-btn'));
 
     expect(await screen.findByText(TRUST_GATE_MESSAGE)).toBeInTheDocument();
-    // Still alive — the form is present.
-    expect(screen.getByTestId('submit-btn')).toBeInTheDocument();
   });
 
   it('surfaces the server message verbatim on a content rejection', async () => {
@@ -251,18 +314,57 @@ describe('voting', () => {
       items: [makeItem({ key: 'g1', title: 'Gated', count: 4 })],
       nextCursor: undefined,
     });
-    // Bare code → the curated gate copy (see the submit trust-gate test above).
-    h.shared.vote.mockRejectedValueOnce(new Error('FORBIDDEN'));
+    h.shared.vote.mockRejectedValueOnce(new Error('account too new to vote'));
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText('Gated');
 
     await user.click(screen.getByTestId('vote-btn'));
 
-    expect(await screen.findByText(TRUST_GATE_MESSAGE)).toBeInTheDocument();
+    // The async action error is surfaced via a Toast (aria-live region); it
+    // carries the server's specific reason.
+    expect(await screen.findByText('account too new to vote')).toBeInTheDocument();
     // Count rolled back to 4, not-voted.
     await waitFor(() => expect(screen.getByTestId('vote-count')).toHaveTextContent('4'));
     expect(screen.getByTestId('vote-btn')).toHaveAttribute('aria-pressed', 'false');
+  });
+});
+
+describe('edit own request', () => {
+  it('edits the author\'s own row in place via update() — preserving key + votes', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'mine', title: 'Typo in titel', authorUserId: 7777, count: 12 })],
+      nextCursor: undefined,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Typo in titel');
+
+    // Own row exposes an Edit affordance.
+    await user.click(screen.getByTestId('edit-btn'));
+    const titleInput = screen.getByTestId('edit-title-input');
+    await user.clear(titleInput);
+    await user.type(titleInput, 'Typo in title (fixed)');
+    await user.click(screen.getByTestId('edit-save-btn'));
+
+    // update() called with the same key; append() NOT used (votes preserved).
+    await waitFor(() =>
+      expect(h.shared.update).toHaveBeenCalledWith('mine', { title: 'Typo in title (fixed)' }),
+    );
+    expect(h.shared.append).not.toHaveBeenCalled();
+    // The row now shows the edited title and the vote count is untouched.
+    expect(await screen.findByText('Typo in title (fixed)')).toBeInTheDocument();
+    expect(screen.getByTestId('vote-count')).toHaveTextContent('12');
+  });
+
+  it('does not offer Edit on someone else\'s row', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'theirs', title: 'Not mine', authorUserId: 4021, count: 3 })],
+      nextCursor: undefined,
+    });
+    render(<App />);
+    await screen.findByText('Not mine');
+    expect(screen.queryByTestId('edit-btn')).toBeNull();
   });
 });
 
@@ -289,6 +391,29 @@ describe('withdraw', () => {
     expect(h.shared.withdraw).toHaveBeenCalledWith('mine');
     await waitFor(() => expect(screen.queryByText('My idea')).toBeNull());
     expect(screen.getByText('Their idea')).toBeInTheDocument();
+  });
+});
+
+describe('theme tokens', () => {
+  it('targets the live design-system --civitai-color-* vars, not the stale --ci-color-*', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 't1', title: 'Themed row', count: 1 })],
+      nextCursor: undefined,
+    });
+    const { container } = render(<App />);
+    await screen.findByText('Themed row');
+
+    // The token-retarget root-cause fix: every inline `var(--…-color-…)` must be
+    // the design-system's `--civitai-color-*`; NO element may still reference the
+    // unresolved `--ci-color-*` names that rendered off-theme in the real host.
+    const styled = Array.from(container.querySelectorAll<HTMLElement>('[style]'));
+    const html = container.innerHTML;
+    expect(html).toContain('--civitai-color-');
+    for (const el of styled) {
+      const style = el.getAttribute('style') ?? '';
+      expect(style).not.toMatch(/--ci-color-/);
+      expect(style).not.toContain('text-muted');
+    }
   });
 });
 
