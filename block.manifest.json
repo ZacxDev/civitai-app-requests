@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "app-requests",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "name": "App Requests",
   "type": "block",
   "scopes": [

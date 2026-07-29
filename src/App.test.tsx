@@ -176,6 +176,100 @@ describe('board rendering', () => {
   });
 });
 
+describe('posting while "Top" is active', () => {
+  it('re-ranks the whole board after a post — not collapsed to page 1 with a lying note', async () => {
+    // page 1: a low-vote item + more pages; page 2: a high-vote item. The mock
+    // is cursor-keyed so a re-scan re-fetches page 2 (and we can count it).
+    const p1 = makeItem({ key: 'p1', title: 'Low vote page 1', count: 1 });
+    const p2 = makeItem({ key: 'p2', title: 'High vote page 2', count: 50 });
+    let cur1Fetches = 0;
+    h.shared.list.mockImplementation((arg?: { cursor?: string }) => {
+      const cursor = arg?.cursor;
+      if (!cursor) return Promise.resolve({ items: [p1], nextCursor: 'cur-1' });
+      if (cursor === 'cur-1') {
+        cur1Fetches += 1;
+        return Promise.resolve({ items: [p2], nextCursor: undefined });
+      }
+      return Promise.resolve({ items: [], nextCursor: undefined });
+    });
+    h.shared.append.mockResolvedValue({ key: 'posted-1' });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Low vote page 1');
+
+    // Enter Top → the bounded scan pulls page 2 and ranks it first.
+    const tablist = screen.getByTestId('sort-control');
+    await user.click(within(tablist).getAllByRole('tab').find((t) => t.textContent === 'Top')!);
+    expect(await screen.findByText('High vote page 2')).toBeInTheDocument();
+    expect(
+      within(screen.getAllByTestId('request-row')[0]).getByText('High vote page 2'),
+    ).toBeInTheDocument();
+    const fetchesAfterScan = cur1Fetches; // 1 (the initial Top scan)
+
+    // Post a new request while STILL sorted "Top".
+    await user.type(screen.getByTestId('title-input'), 'A brand new idea');
+    await user.click(screen.getByTestId('submit-btn'));
+
+    // A fresh WHOLE-board re-scan ran (page-2 cursor fetched again) rather than
+    // the refresh collapsing to page 1 — so the ranking still covers the whole
+    // board and the "first N" note matches the ranked data.
+    await waitFor(() => expect(cur1Fetches).toBeGreaterThan(fetchesAfterScan));
+    expect(await screen.findByText('High vote page 2')).toBeInTheDocument();
+    expect(
+      within(screen.getAllByTestId('request-row')[0]).getByText('High vote page 2'),
+    ).toBeInTheDocument();
+    // Page 1 is still present too — the whole board, not a single page.
+    expect(screen.getByText('Low vote page 1')).toBeInTheDocument();
+  });
+
+  it('leaving "Top" for "Newest" clears the partial-rank note', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'n1', title: 'Only row', count: 1 })],
+      nextCursor: undefined,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Only row');
+    const tabs = () => within(screen.getByTestId('sort-control')).getAllByRole('tab');
+    await user.click(tabs().find((t) => t.textContent === 'Top')!);
+    await user.click(tabs().find((t) => t.textContent === 'Newest')!);
+    // The partial-rank note (role=note) must not linger under Newest.
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+});
+
+describe('malformed shared row', () => {
+  it('drops a malformed row instead of bricking the whole board', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [
+        makeItem({ key: 'good', title: 'Good row', count: 2 }),
+        // A poisoned row: createdAt is a raw string (not a Date) and no title —
+        // sortItems('.getTime()') / render('.value.title') would throw on it,
+        // and Retry would re-fetch the same poison (dead board) without a guard.
+        {
+          key: 'bad',
+          authorUserId: 1,
+          value: {},
+          count: 0,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        } as unknown as SharedListItem,
+      ],
+      nextCursor: undefined,
+    });
+    render(<App />);
+
+    // The good row renders — the board did NOT throw to the error boundary.
+    expect(await screen.findByText('Good row')).toBeInTheDocument();
+    expect(screen.queryByTestId('root-boundary')).toBeNull();
+    // Exactly one row: the bad row is degraded to a MISSING row, not a dead board.
+    expect(screen.getAllByTestId('request-row')).toHaveLength(1);
+    // Header count reflects only the well-formed row.
+    expect(screen.getByText('1 idea')).toBeInTheDocument();
+  });
+});
+
 describe('submit', () => {
   it('appends {title, body} and refreshes the list', async () => {
     const user = userEvent.setup();

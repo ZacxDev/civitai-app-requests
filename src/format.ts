@@ -45,6 +45,26 @@ export function relativeTime(date: Date, now: Date = new Date()): string {
 }
 
 /**
+ * Cheap structural guard: is this shared row safe to sort + render? {@link
+ * sortItems} reads `.createdAt.getTime()` / `.count` and the row renderer reads
+ * `.value.title`, so a single malformed row (bad/missing field) would throw in
+ * the sort `useMemo` / render and — because Retry re-fetches the SAME poisoned
+ * row — brick the whole board unrecoverably. Filtering rows through this BEFORE
+ * they reach state degrades one bad row to one MISSING row, not a dead board.
+ */
+export function isWellFormedItem(item: SharedListItem | null | undefined): boolean {
+  return (
+    item != null &&
+    typeof item.key === 'string' &&
+    item.value != null &&
+    typeof item.value.title === 'string' &&
+    item.createdAt instanceof Date &&
+    !Number.isNaN(item.createdAt.getTime()) &&
+    typeof item.count === 'number'
+  );
+}
+
+/**
  * Order the board for display. The server returns entries newest-first; `newest`
  * preserves that, `top` re-sorts by vote count (descending), breaking ties by
  * recency (newer first) so the order is stable and intuitive. Pure + total — it

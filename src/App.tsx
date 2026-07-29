@@ -44,6 +44,7 @@ import {
   BODY_MAX,
   isOverLimit,
   isOwnEntry,
+  isWellFormedItem,
   lengthHint,
   relativeTime,
   sortItems,
@@ -167,6 +168,13 @@ function Board() {
   const [topPartial, setTopPartial] = useState(false);
   const [scanningTop, setScanningTop] = useState(false);
 
+  // The latest sort, readable from the STABLE `refreshList` callback without
+  // making it sort-dependent. A sort-dependent `refreshList` would change
+  // identity on every toggle and re-fire the initial-load effect (which depends
+  // on it) — re-hydrating + double-fetching. The ref sidesteps that.
+  const sortRef = useRef(sort);
+  sortRef.current = sort;
+
   // Key of the request the viewer just posted this session — pinned to the top
   // of the board regardless of the active sort so it's immediately visible.
   // Cleared when the viewer picks an explicit sort.
@@ -177,20 +185,65 @@ function Board() {
   const [votedKeys, setVotedKeys] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState<Set<string>>(new Set());
 
-  // Load a fresh first page of the board.
+  /**
+   * Page forward from `startCursor`, collecting well-formed rows not already in
+   * `seenKeys`, up to {@link TOP_SCAN_MAX_PAGES}. Returns the fetched rows + the
+   * final cursor (defined ⇒ board is bigger than the scan window). Shared by the
+   * on-toggle scan AND the post-refresh re-rank so both stay honest. Malformed
+   * rows are dropped here so one bad row can't poison the ranked window.
+   */
+  const pageForwardForTop = useCallback(
+    async (startCursor: string | undefined, seenKeys: Set<string>) => {
+      let cursor = startCursor;
+      let pages = 0;
+      const fetched: SharedListItem[] = [];
+      while (cursor && pages < TOP_SCAN_MAX_PAGES) {
+        const res = await shared.list({ limit: PAGE_SIZE, cursor });
+        for (const it of res.items) {
+          if (isWellFormedItem(it) && !seenKeys.has(it.key)) {
+            seenKeys.add(it.key);
+            fetched.push(it);
+          }
+        }
+        cursor = res.nextCursor;
+        pages += 1;
+      }
+      return { fetched, finalCursor: cursor };
+    },
+    [shared],
+  );
+
+  // Load a fresh first page of the board. Sort-aware (via `sortRef`): when "Top"
+  // is active it re-ranks the WHOLE board (continues the bounded scan from
+  // page-1's cursor) so a refresh — e.g. after a post — can't collapse the
+  // ranking to one page while the note still claims a full-board rank. Malformed
+  // rows are filtered before they reach state (one missing row, not a dead board).
   const refreshList = useCallback(async () => {
     setLoading(true);
     setListError(null);
     try {
       const res = await shared.list({ limit: PAGE_SIZE });
-      setItems(res.items);
-      setNextCursor(res.nextCursor);
+      const firstPage = res.items.filter(isWellFormedItem);
+      if (sortRef.current === 'top') {
+        setScanningTop(true);
+        const seen = new Set(firstPage.map((i) => i.key));
+        const { fetched, finalCursor } = await pageForwardForTop(res.nextCursor, seen);
+        setItems([...firstPage, ...fetched]);
+        setNextCursor(finalCursor);
+        setTopPartial(Boolean(finalCursor));
+        setScanningTop(false);
+      } else {
+        setItems(firstPage);
+        setNextCursor(res.nextCursor);
+        setTopPartial(false); // the note can't outlive its data
+      }
     } catch (err) {
       setListError(classifyWriteError(err).message);
+      setScanningTop(false);
     } finally {
       setLoading(false);
     }
-  }, [shared]);
+  }, [shared, pageForwardForTop]);
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
@@ -198,9 +251,10 @@ function Board() {
     try {
       const res = await shared.list({ limit: PAGE_SIZE, cursor: nextCursor });
       setItems((prev) => {
-        // De-dupe defensively on key (a concurrent append could shift a page).
+        // De-dupe defensively on key (a concurrent append could shift a page),
+        // and drop malformed rows so one bad row can't brick the board.
         const seen = new Set(prev.map((i) => i.key));
-        return [...prev, ...res.items.filter((i) => !seen.has(i.key))];
+        return [...prev, ...res.items.filter((i) => isWellFormedItem(i) && !seen.has(i.key))];
       });
       setNextCursor(res.nextCursor);
     } catch (err) {
@@ -221,30 +275,17 @@ function Board() {
     setScanningTop(true);
     setListError(null);
     try {
-      let cursor = nextCursor;
-      let pages = 0;
-      const fetched: SharedListItem[] = [];
       const seen = new Set(items.map((i) => i.key));
-      while (cursor && pages < TOP_SCAN_MAX_PAGES) {
-        const res = await shared.list({ limit: PAGE_SIZE, cursor });
-        for (const it of res.items) {
-          if (!seen.has(it.key)) {
-            seen.add(it.key);
-            fetched.push(it);
-          }
-        }
-        cursor = res.nextCursor;
-        pages += 1;
-      }
+      const { fetched, finalCursor } = await pageForwardForTop(nextCursor, seen);
       if (fetched.length > 0) setItems((prev) => [...prev, ...fetched]);
-      setNextCursor(cursor);
-      setTopPartial(Boolean(cursor)); // still more pages beyond the cap
+      setNextCursor(finalCursor);
+      setTopPartial(Boolean(finalCursor)); // still more pages beyond the cap
     } catch (err) {
       setListError(classifyWriteError(err).message);
     } finally {
       setScanningTop(false);
     }
-  }, [shared, nextCursor, items]);
+  }, [pageForwardForTop, nextCursor, items]);
 
   // Initial load once the host context is ready: hydrate the voted-set from the
   // per-viewer KV (empty for anon), then fetch the board.
