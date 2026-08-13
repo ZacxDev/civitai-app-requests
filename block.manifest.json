@@ -3,6 +3,7 @@
   "blockId": "app-requests",
   "version": "0.2.0",
   "name": "App Requests",
+  "tagline": "Ask. Vote. Watch it get built.",
   "type": "block",
   "scopes": [
     "apps:storage:read",
