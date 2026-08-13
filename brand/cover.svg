@@ -1,44 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-label="App Requests cover">
-  <!-- App Requests cover — "Ask. Vote. Watch it get built."
-       A noticeboard: amber cards resting on one baseline, three of them risen to different
-       heights, the tallest near centre-right. Beneath each risen card sits a column of solid
-       cyan triangles doing the lifting — more triangles under the higher cards. The left third
-       holds two cards still on the baseline, unvoted.
-
-       Direction is GEOMETRIC, never adjectival: every triangle has its apex at the TOP and its
-       flat base at the BOTTOM. The word "chevron" is banned — it rendered downward 3 of 4 times
-       in the generated round, inverting a voting board into a downvote.
-
-       v3: two fixes from looking at the render. (a) The first draft put every card in the
-       lower half, leaving ~60% of the frame dead; the tallest now rises 380px so the stack
-       reaches the upper third. (b) v2 COLLIDED — a risen card at x=1300 and a baseline card
-       at x=1400 overlapped by 90px, because the layout was written as two independent lists
-       and never checked as one row. Six cards now sit on a single 220px pitch, so no pair
-       can overlap by construction.
-       Palette: ink #0B0E14 ground · amber #FFA726 cards · cyan #4DD0E1 triangles. -->
-  <rect width="1600" height="900" fill="#0B0E14"/>
-  <rect x="80" y="758" width="1440" height="5" fill="#FFA726" fill-opacity="0.30"/>
-  <g fill="#FFA726">
-    <!-- one row, 220px pitch, 190px cards — gaps guaranteed -->
-    <rect x="110"  y="654" width="190" height="104" rx="24"/>
-    <rect x="330"  y="654" width="190" height="104" rx="24"/>
-    <rect x="600"  y="654" width="190" height="104" rx="24"/>
-    <!-- risen, each by exactly what its triangles account for -->
-    <rect x="820"  y="494" width="190" height="104" rx="24"/>
-    <rect x="1040" y="274" width="190" height="104" rx="24"/>
-    <rect x="1260" y="544" width="190" height="104" rx="24"/>
-  </g>
-  <g fill="#4DD0E1">
-    <!-- +160: two -->
-    <polygon points="915,600 949,668 881,668"/>
-    <polygon points="915,682 949,750 881,750"/>
-    <!-- +380, centre-right, the tallest: five -->
-    <polygon points="1135,378 1169,442 1101,442"/>
-    <polygon points="1135,457 1169,521 1101,521"/>
-    <polygon points="1135,536 1169,600 1101,600"/>
-    <polygon points="1135,615 1169,679 1101,679"/>
-    <polygon points="1135,694 1169,758 1101,758"/>
-    <!-- +110: one -->
-    <polygon points="1355,668 1389,748 1321,748"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" fill="#F09800"/>
+  <rect x="71.25" y="156.25" width="117.50" height="117.50" rx="16.92" fill="#B87400"/>
+  <polygon points="130.00,177.40 167.60,243.20 92.40,243.20" fill="#FFA305"/>
+  <rect x="71.25" y="391.25" width="117.50" height="117.50" rx="16.92" fill="#B87400"/>
+  <polygon points="130.00,412.40 167.60,478.20 92.40,478.20" fill="#FFA305"/>
+  <rect x="71.25" y="626.25" width="117.50" height="117.50" rx="16.92" fill="#B87400"/>
+  <polygon points="130.00,647.40 167.60,713.20 92.40,713.20" fill="#FFA305"/>
+  <rect x="281.25" y="156.25" width="117.50" height="117.50" rx="16.92" fill="#C77E00"/>
+  <polygon points="340.00,177.40 377.60,243.20 302.40,243.20" fill="#FFA915"/>
+  <rect x="281.25" y="391.25" width="117.50" height="117.50" rx="16.92" fill="#C77E00"/>
+  <polygon points="340.00,412.40 377.60,478.20 302.40,478.20" fill="#FFA915"/>
+  <rect x="281.25" y="626.25" width="117.50" height="117.50" rx="16.92" fill="#C77E00"/>
+  <polygon points="340.00,647.40 377.60,713.20 302.40,713.20" fill="#FFA915"/>
+  <rect x="491.25" y="156.25" width="117.50" height="117.50" rx="16.92" fill="#D68800"/>
+  <polygon points="550.00,177.40 587.60,243.20 512.40,243.20" fill="#FFAF24"/>
+  <rect x="491.25" y="391.25" width="117.50" height="117.50" rx="16.92" fill="#D68800"/>
+  <polygon points="550.00,412.40 587.60,478.20 512.40,478.20" fill="#FFAF24"/>
+  <rect x="491.25" y="626.25" width="117.50" height="117.50" rx="16.92" fill="#D68800"/>
+  <polygon points="550.00,647.40 587.60,713.20 512.40,713.20" fill="#FFAF24"/>
+  <rect x="701.25" y="156.25" width="117.50" height="117.50" rx="16.92" fill="#E69200"/>
+  <polygon points="760.00,177.40 797.60,243.20 722.40,243.20" fill="#FFB433"/>
+  <rect x="701.25" y="391.25" width="117.50" height="117.50" rx="16.92" fill="#E69200"/>
+  <polygon points="760.00,412.40 797.60,478.20 722.40,478.20" fill="#FFB433"/>
+  <rect x="701.25" y="626.25" width="117.50" height="117.50" rx="16.92" fill="#E69200"/>
+  <polygon points="760.00,647.40 797.60,713.20 722.40,713.20" fill="#FFB433"/>
+  <rect x="1115.00" y="295.00" width="310.00" height="310.00" rx="44.64" fill="#AE6E00"/>
+  <polygon points="1270.00,350.80 1369.20,524.40 1170.80,524.40" fill="#FFD48A"/>
 </svg>
