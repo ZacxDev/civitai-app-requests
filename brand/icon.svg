@@ -1,23 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="App Requests">
-  <!-- App Requests — "Ask. Vote. Watch it get built."
-       Motif: the card that rises, lifted by two solid triangles.
-       Direction is GEOMETRIC, not adjectival: apex at top (smaller y), flat base at bottom.
-       The word "chevron" is banned here — it rendered downward 3 of 4 times (rev-2 §2.4).
-
-       v2 fix: the first draft's "lifted" card sat only 34px clear of a 102px-pitch stack, so
-       the lift read as even spacing — the whole motif ("the rise is EARNED") was lost. The
-       gap is now 2.2x the stack pitch and the lifted card is wider than the ones below it,
-       so the hierarchy survives a squint. Triangles enlarged to match.
-       Palette: plate #FFA726 · cards #FFD8A0 · triangles #4DD0E1 (3 colours). -->
-  <rect width="1024" height="1024" rx="224" fill="#FFA726"/>
-  <g fill="#4DD0E1">
-    <polygon points="512,172 594,266 430,266"/>
-    <polygon points="512,286 594,380 430,380"/>
-  </g>
-  <!-- the lifted card: wider, and clear of the stack by 2.2x the stack pitch -->
-  <rect x="222" y="438" width="580" height="104" rx="26" fill="#FFD8A0"/>
-  <g fill="#FFD8A0">
-    <rect x="272" y="654" width="480" height="86" rx="22"/>
-    <rect x="272" y="756" width="480" height="86" rx="22"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#F09800"/>
+  <rect x="262.00" y="262.00" width="500.00" height="500.00" rx="72.00" fill="#AE6E00"/>
+  <polygon points="512.00,352.00 672.00,632.00 352.00,632.00" fill="#FFD48A"/>
 </svg>
