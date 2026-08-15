@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "app-requests",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "name": "App Requests",
   "tagline": "Ask. Vote. Watch it get built.",
   "type": "block",
