@@ -25,6 +25,7 @@ import {
   Card,
   Group,
   Loader,
+  Modal,
   SegmentedControl,
   Stack,
   Textarea,
@@ -42,8 +43,10 @@ import { RootBoundary } from './RootBoundary.js';
 import {
   authorLabel,
   BODY_MAX,
+  findSimilarRequests,
   isOverLimit,
   isOwnEntry,
+  isWellFormedItem,
   lengthHint,
   relativeTime,
   sortItems,
@@ -167,6 +170,13 @@ function Board() {
   const [topPartial, setTopPartial] = useState(false);
   const [scanningTop, setScanningTop] = useState(false);
 
+  // The latest sort, readable from the STABLE `refreshList` callback without
+  // making it sort-dependent. A sort-dependent `refreshList` would change
+  // identity on every toggle and re-fire the initial-load effect (which depends
+  // on it) — re-hydrating + double-fetching. The ref sidesteps that.
+  const sortRef = useRef(sort);
+  sortRef.current = sort;
+
   // Key of the request the viewer just posted this session — pinned to the top
   // of the board regardless of the active sort so it's immediately visible.
   // Cleared when the viewer picks an explicit sort.
@@ -177,20 +187,65 @@ function Board() {
   const [votedKeys, setVotedKeys] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState<Set<string>>(new Set());
 
-  // Load a fresh first page of the board.
+  /**
+   * Page forward from `startCursor`, collecting well-formed rows not already in
+   * `seenKeys`, up to {@link TOP_SCAN_MAX_PAGES}. Returns the fetched rows + the
+   * final cursor (defined ⇒ board is bigger than the scan window). Shared by the
+   * on-toggle scan AND the post-refresh re-rank so both stay honest. Malformed
+   * rows are dropped here so one bad row can't poison the ranked window.
+   */
+  const pageForwardForTop = useCallback(
+    async (startCursor: string | undefined, seenKeys: Set<string>) => {
+      let cursor = startCursor;
+      let pages = 0;
+      const fetched: SharedListItem[] = [];
+      while (cursor && pages < TOP_SCAN_MAX_PAGES) {
+        const res = await shared.list({ limit: PAGE_SIZE, cursor });
+        for (const it of res.items) {
+          if (isWellFormedItem(it) && !seenKeys.has(it.key)) {
+            seenKeys.add(it.key);
+            fetched.push(it);
+          }
+        }
+        cursor = res.nextCursor;
+        pages += 1;
+      }
+      return { fetched, finalCursor: cursor };
+    },
+    [shared],
+  );
+
+  // Load a fresh first page of the board. Sort-aware (via `sortRef`): when "Top"
+  // is active it re-ranks the WHOLE board (continues the bounded scan from
+  // page-1's cursor) so a refresh — e.g. after a post — can't collapse the
+  // ranking to one page while the note still claims a full-board rank. Malformed
+  // rows are filtered before they reach state (one missing row, not a dead board).
   const refreshList = useCallback(async () => {
     setLoading(true);
     setListError(null);
     try {
       const res = await shared.list({ limit: PAGE_SIZE });
-      setItems(res.items);
-      setNextCursor(res.nextCursor);
+      const firstPage = res.items.filter(isWellFormedItem);
+      if (sortRef.current === 'top') {
+        setScanningTop(true);
+        const seen = new Set(firstPage.map((i) => i.key));
+        const { fetched, finalCursor } = await pageForwardForTop(res.nextCursor, seen);
+        setItems([...firstPage, ...fetched]);
+        setNextCursor(finalCursor);
+        setTopPartial(Boolean(finalCursor));
+        setScanningTop(false);
+      } else {
+        setItems(firstPage);
+        setNextCursor(res.nextCursor);
+        setTopPartial(false); // the note can't outlive its data
+      }
     } catch (err) {
       setListError(classifyWriteError(err).message);
+      setScanningTop(false);
     } finally {
       setLoading(false);
     }
-  }, [shared]);
+  }, [shared, pageForwardForTop]);
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
@@ -198,9 +253,10 @@ function Board() {
     try {
       const res = await shared.list({ limit: PAGE_SIZE, cursor: nextCursor });
       setItems((prev) => {
-        // De-dupe defensively on key (a concurrent append could shift a page).
+        // De-dupe defensively on key (a concurrent append could shift a page),
+        // and drop malformed rows so one bad row can't brick the board.
         const seen = new Set(prev.map((i) => i.key));
-        return [...prev, ...res.items.filter((i) => !seen.has(i.key))];
+        return [...prev, ...res.items.filter((i) => isWellFormedItem(i) && !seen.has(i.key))];
       });
       setNextCursor(res.nextCursor);
     } catch (err) {
@@ -221,30 +277,17 @@ function Board() {
     setScanningTop(true);
     setListError(null);
     try {
-      let cursor = nextCursor;
-      let pages = 0;
-      const fetched: SharedListItem[] = [];
       const seen = new Set(items.map((i) => i.key));
-      while (cursor && pages < TOP_SCAN_MAX_PAGES) {
-        const res = await shared.list({ limit: PAGE_SIZE, cursor });
-        for (const it of res.items) {
-          if (!seen.has(it.key)) {
-            seen.add(it.key);
-            fetched.push(it);
-          }
-        }
-        cursor = res.nextCursor;
-        pages += 1;
-      }
+      const { fetched, finalCursor } = await pageForwardForTop(nextCursor, seen);
       if (fetched.length > 0) setItems((prev) => [...prev, ...fetched]);
-      setNextCursor(cursor);
-      setTopPartial(Boolean(cursor)); // still more pages beyond the cap
+      setNextCursor(finalCursor);
+      setTopPartial(Boolean(finalCursor)); // still more pages beyond the cap
     } catch (err) {
       setListError(classifyWriteError(err).message);
     } finally {
       setScanningTop(false);
     }
-  }, [shared, nextCursor, items]);
+  }, [pageForwardForTop, nextCursor, items]);
 
   // Initial load once the host context is ready: hydrate the voted-set from the
   // per-viewer KV (empty for anon), then fetch the board.
@@ -478,7 +521,12 @@ function Board() {
             <SignInCard onSignIn={() => requestSignIn()} />
           ) : (
             <div ref={formRef}>
-              <SubmitForm disabled={!ready} shared={shared} onSubmitted={onSubmitted} />
+              <SubmitForm
+                disabled={!ready}
+                shared={shared}
+                items={items}
+                onSubmitted={onSubmitted}
+              />
             </div>
           )}
 
@@ -603,9 +651,12 @@ function Header({ count }: { count: number }) {
 
 function Footer() {
   return (
-    <p style={footerStyle}>
-      One vote per person. Be kind and constructive — posts are moderated.
-    </p>
+    <Stack gap={4} style={{ marginTop: 4 }}>
+      <p style={footerStyle}>
+        Up-vote as many ideas as you like — one vote each. The team reviews the top requests.
+      </p>
+      <p style={footerStyle}>Be kind and constructive — posts are moderated.</p>
+    </Stack>
   );
 }
 
@@ -613,10 +664,13 @@ function Footer() {
 function SubmitForm({
   disabled,
   shared,
+  items,
   onSubmitted,
 }: {
   disabled: boolean;
   shared: ReturnType<typeof useSharedStorage>;
+  /** The already-loaded board — read (never mutated) for the duplicate nudge. */
+  items: SharedListItem[];
   onSubmitted: (posted: { key: string; title: string; body?: string }) => Promise<void> | void;
 }) {
   const [title, setTitle] = useState('');
@@ -630,6 +684,15 @@ function SubmitForm({
   const bodyOver = isOverLimit(body, BODY_MAX);
   const canSubmit =
     !disabled && !submitting && trimmedTitle.length > 0 && !titleOver && !bodyOver;
+
+  // A SOFT, non-blocking nudge: if the draft title looks like an already-posted
+  // request, surface the top matches so the poster can up-vote the existing idea
+  // instead of splitting the vote across a near-duplicate. Recomputed only when
+  // the title or the loaded board changes; it never gates the Post button.
+  const similar = useMemo(
+    () => findSimilarRequests(title, items, 3),
+    [title, items],
+  );
 
   async function submit() {
     if (!canSubmit) return;
@@ -652,68 +715,96 @@ function SubmitForm({
 
   return (
     <Card padding="md" style={cardStyle}>
-      <Stack gap={12}>
-        <strong style={sectionTitle}>Suggest a request</strong>
-        <div>
-          <TextInput
-            label="Title"
-            placeholder="e.g. A prompt-library app with tags"
-            value={title}
-            maxLength={TITLE_MAX + 40 /* let the server be the hard gate; warn softly */}
-            onChange={(e) => {
-              setTitle(e.currentTarget.value);
-              if (error) setError(null);
-            }}
-            error={titleOver ? `Title must be ${TITLE_MAX} characters or fewer` : undefined}
-            data-testid="title-input"
-          />
-          <div style={hintRowStyle}>
-            <span style={titleOver ? hintOverStyle : hintStyle}>{lengthHint(title, TITLE_MAX)}</span>
+      {/*
+        A real <form> so Enter in the single-line Title submits (native implicit
+        submission via the type="submit" button); Enter in the Textarea stays a
+        newline, as expected. onSubmit is the single submit path — the button has
+        no onClick, so a click and Enter both route through here (one append).
+      */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <Stack gap={12}>
+          <strong style={sectionTitle}>Suggest a request</strong>
+          <div>
+            <TextInput
+              label="Title"
+              placeholder="e.g. A prompt-library app with tags"
+              value={title}
+              maxLength={TITLE_MAX + 40 /* let the server be the hard gate; warn softly */}
+              onChange={(e) => {
+                setTitle(e.currentTarget.value);
+                if (error) setError(null);
+              }}
+              error={titleOver ? `Title must be ${TITLE_MAX} characters or fewer` : undefined}
+              data-testid="title-input"
+            />
+            <div style={hintRowStyle}>
+              <span style={titleOver ? hintOverStyle : hintStyle}>{lengthHint(title, TITLE_MAX)}</span>
+            </div>
           </div>
-        </div>
-        <div>
-          <Textarea
-            label="Details (optional)"
-            placeholder="What should it do? Who's it for? Any references?"
-            value={body}
-            rows={4}
-            onChange={(e) => {
-              setBody(e.currentTarget.value);
-              if (error) setError(null);
-            }}
-            error={bodyOver ? `Details must be ${BODY_MAX} characters or fewer` : undefined}
-            data-testid="body-input"
-          />
-          <div style={hintRowStyle}>
-            <span style={bodyOver ? hintOverStyle : hintStyle}>{lengthHint(body, BODY_MAX)}</span>
+          <div>
+            <Textarea
+              label="Details (optional)"
+              placeholder="What should it do? Who's it for? Any references?"
+              value={body}
+              rows={4}
+              onChange={(e) => {
+                setBody(e.currentTarget.value);
+                if (error) setError(null);
+              }}
+              error={bodyOver ? `Details must be ${BODY_MAX} characters or fewer` : undefined}
+              data-testid="body-input"
+            />
+            <div style={hintRowStyle}>
+              <span style={bodyOver ? hintOverStyle : hintStyle}>{lengthHint(body, BODY_MAX)}</span>
+            </div>
           </div>
-        </div>
 
-        <div aria-live="polite">
-          {error && (
-            <Alert color="warning" title="Couldn't post that">
-              {error}
+          {similar.length > 0 && !justPosted && (
+            <Alert color="info" title="Similar requests already posted?" data-testid="similar-nudge">
+              <span style={mutedText}>
+                Up-voting an existing idea helps it rise faster than a new post:
+              </span>
+              <ul style={similarListStyle}>
+                {similar.map((it) => (
+                  <li key={it.key} style={requestTitleStyle} data-testid="similar-item">
+                    {it.value.title}
+                  </li>
+                ))}
+              </ul>
             </Alert>
           )}
-          {justPosted && !error && (
-            <Alert color="success" title="Posted">
-              Thanks — your request is on the board.
-            </Alert>
-          )}
-        </div>
 
-        <Group justify="flex-end">
-          <Button
-            color="primary"
-            loading={submitting}
-            disabled={!canSubmit}
-            onClick={() => void submit()}
-            data-testid="submit-btn"
-          >
-            Post request
-          </Button>
-        </Group>
-      </Stack>
+          <div aria-live="polite">
+            {error && (
+              <Alert color="warning" title="Couldn't post that">
+                {error}
+              </Alert>
+            )}
+            {justPosted && !error && (
+              <Alert color="success" title="Posted">
+                Thanks — your request is on the board.
+              </Alert>
+            )}
+          </div>
+
+          <Group justify="flex-end">
+            <Button
+              type="submit"
+              color="primary"
+              loading={submitting}
+              disabled={!canSubmit}
+              data-testid="submit-btn"
+            >
+              Post request
+            </Button>
+          </Group>
+        </Stack>
+      </form>
     </Card>
   );
 }
@@ -746,6 +837,10 @@ function RequestRow({
 }) {
   const own = isOwnEntry(item.authorUserId, viewerId);
   const [editing, setEditing] = useState(false);
+  // Withdraw is destructive (removes the post AND its votes with no undo), so it
+  // is gated behind an explicit confirm dialog that names the vote count — not a
+  // single mis-click on a subtle text button.
+  const [confirmingWithdraw, setConfirmingWithdraw] = useState(false);
 
   return (
     <Card padding="md" style={cardStyle} data-testid="request-row" data-key={item.key}>
@@ -794,7 +889,7 @@ function RequestRow({
                       variant="subtle"
                       size="sm"
                       color="error"
-                      onClick={onWithdraw}
+                      onClick={() => setConfirmingWithdraw(true)}
                       disabled={busy}
                       data-testid="withdraw-btn"
                     >
@@ -807,6 +902,46 @@ function RequestRow({
           )}
         </Stack>
       </Group>
+
+      <Modal
+        opened={confirmingWithdraw}
+        onClose={() => setConfirmingWithdraw(false)}
+        title="Withdraw this request?"
+        size="sm"
+      >
+        <Stack gap={16} data-testid="withdraw-confirm">
+          <p style={{ ...mutedText, margin: 0 }}>
+            It and its{' '}
+            <strong style={{ color: token.text }}>
+              {item.count} vote{item.count === 1 ? '' : 's'}
+            </strong>{' '}
+            will be permanently removed. This can’t be undone.
+          </p>
+          <Group justify="flex-end" gap={8}>
+            <Button
+              size="sm"
+              variant="subtle"
+              onClick={() => setConfirmingWithdraw(false)}
+              disabled={busy}
+              data-testid="withdraw-cancel-btn"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              color="error"
+              loading={busy}
+              onClick={() => {
+                setConfirmingWithdraw(false);
+                onWithdraw();
+              }}
+              data-testid="withdraw-confirm-btn"
+            >
+              Withdraw
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Card>
   );
 }
@@ -960,3 +1095,10 @@ const requestBodyStyle: CSSProperties = {
 };
 const metaDotStyle: CSSProperties = { color: token.dimmed };
 const footerStyle: CSSProperties = { ...metaText, textAlign: 'center', margin: 0 };
+const similarListStyle: CSSProperties = {
+  margin: '6px 0 0',
+  paddingInlineStart: 18,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+};

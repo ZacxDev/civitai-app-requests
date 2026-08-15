@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "app-requests",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "name": "App Requests",
   "tagline": "Ask. Vote. Watch it get built.",
   "type": "block",
@@ -12,6 +12,13 @@
     "apps:storage:shared:write",
     "user:read:self"
   ],
+  "scopeJustifications": {
+    "apps:storage:read": "Reads the viewer's own per-user record of which requests they have up-voted, so their vote state stays consistent across sessions.",
+    "apps:storage:write": "Stores the viewer's own per-user record of which requests they have up-voted.",
+    "apps:storage:shared:read": "Lists the shared board of app/feature requests visible to all users.",
+    "apps:storage:shared:write": "Posts, edits, up-votes, and withdraws requests on the shared board visible to all users.",
+    "user:read:self": "Reads the viewer's identity to attribute their own posts and gate author-only edit/withdraw."
+  },
   "page": {
     "path": "/",
     "title": "App Requests",
