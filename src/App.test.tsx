@@ -176,6 +176,100 @@ describe('board rendering', () => {
   });
 });
 
+describe('posting while "Top" is active', () => {
+  it('re-ranks the whole board after a post — not collapsed to page 1 with a lying note', async () => {
+    // page 1: a low-vote item + more pages; page 2: a high-vote item. The mock
+    // is cursor-keyed so a re-scan re-fetches page 2 (and we can count it).
+    const p1 = makeItem({ key: 'p1', title: 'Low vote page 1', count: 1 });
+    const p2 = makeItem({ key: 'p2', title: 'High vote page 2', count: 50 });
+    let cur1Fetches = 0;
+    h.shared.list.mockImplementation((arg?: { cursor?: string }) => {
+      const cursor = arg?.cursor;
+      if (!cursor) return Promise.resolve({ items: [p1], nextCursor: 'cur-1' });
+      if (cursor === 'cur-1') {
+        cur1Fetches += 1;
+        return Promise.resolve({ items: [p2], nextCursor: undefined });
+      }
+      return Promise.resolve({ items: [], nextCursor: undefined });
+    });
+    h.shared.append.mockResolvedValue({ key: 'posted-1' });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Low vote page 1');
+
+    // Enter Top → the bounded scan pulls page 2 and ranks it first.
+    const tablist = screen.getByTestId('sort-control');
+    await user.click(within(tablist).getAllByRole('tab').find((t) => t.textContent === 'Top')!);
+    expect(await screen.findByText('High vote page 2')).toBeInTheDocument();
+    expect(
+      within(screen.getAllByTestId('request-row')[0]).getByText('High vote page 2'),
+    ).toBeInTheDocument();
+    const fetchesAfterScan = cur1Fetches; // 1 (the initial Top scan)
+
+    // Post a new request while STILL sorted "Top".
+    await user.type(screen.getByTestId('title-input'), 'A brand new idea');
+    await user.click(screen.getByTestId('submit-btn'));
+
+    // A fresh WHOLE-board re-scan ran (page-2 cursor fetched again) rather than
+    // the refresh collapsing to page 1 — so the ranking still covers the whole
+    // board and the "first N" note matches the ranked data.
+    await waitFor(() => expect(cur1Fetches).toBeGreaterThan(fetchesAfterScan));
+    expect(await screen.findByText('High vote page 2')).toBeInTheDocument();
+    expect(
+      within(screen.getAllByTestId('request-row')[0]).getByText('High vote page 2'),
+    ).toBeInTheDocument();
+    // Page 1 is still present too — the whole board, not a single page.
+    expect(screen.getByText('Low vote page 1')).toBeInTheDocument();
+  });
+
+  it('leaving "Top" for "Newest" clears the partial-rank note', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'n1', title: 'Only row', count: 1 })],
+      nextCursor: undefined,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Only row');
+    const tabs = () => within(screen.getByTestId('sort-control')).getAllByRole('tab');
+    await user.click(tabs().find((t) => t.textContent === 'Top')!);
+    await user.click(tabs().find((t) => t.textContent === 'Newest')!);
+    // The partial-rank note (role=note) must not linger under Newest.
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+});
+
+describe('malformed shared row', () => {
+  it('drops a malformed row instead of bricking the whole board', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [
+        makeItem({ key: 'good', title: 'Good row', count: 2 }),
+        // A poisoned row: createdAt is a raw string (not a Date) and no title —
+        // sortItems('.getTime()') / render('.value.title') would throw on it,
+        // and Retry would re-fetch the same poison (dead board) without a guard.
+        {
+          key: 'bad',
+          authorUserId: 1,
+          value: {},
+          count: 0,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        } as unknown as SharedListItem,
+      ],
+      nextCursor: undefined,
+    });
+    render(<App />);
+
+    // The good row renders — the board did NOT throw to the error boundary.
+    expect(await screen.findByText('Good row')).toBeInTheDocument();
+    expect(screen.queryByTestId('root-boundary')).toBeNull();
+    // Exactly one row: the bad row is degraded to a MISSING row, not a dead board.
+    expect(screen.getAllByTestId('request-row')).toHaveLength(1);
+    // Header count reflects only the well-formed row.
+    expect(screen.getByText('1 idea')).toBeInTheDocument();
+  });
+});
+
 describe('submit', () => {
   it('appends {title, body} and refreshes the list', async () => {
     const user = userEvent.setup();
@@ -236,6 +330,79 @@ describe('submit', () => {
     await user.click(screen.getByTestId('submit-btn'));
 
     expect(await screen.findByText('Title exceeds 200 characters')).toBeInTheDocument();
+  });
+});
+
+describe('submit affordances', () => {
+  it('Enter in the Title field submits the form (implicit submission)', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('No requests yet');
+    h.shared.list.mockClear();
+
+    const title = screen.getByTestId('title-input');
+    await user.type(title, 'Ship it with Enter{enter}');
+
+    // Enter submitted without a click on the button.
+    await waitFor(() =>
+      expect(h.shared.append).toHaveBeenCalledWith({ title: 'Ship it with Enter' }),
+    );
+  });
+
+  it('Enter inside the Details textarea does NOT submit (stays a newline)', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('No requests yet');
+
+    await user.type(screen.getByTestId('title-input'), 'Has details');
+    await user.type(screen.getByTestId('body-input'), 'line one{enter}line two');
+    // The textarea Enter did not fire a submit.
+    expect(h.shared.append).not.toHaveBeenCalled();
+    expect(screen.getByTestId('body-input')).toHaveValue('line one\nline two');
+  });
+
+  it('nudges about similar already-posted requests without blocking the post', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [
+        makeItem({ key: 'dm', title: 'Dark mode toggle', count: 4 }),
+        makeItem({ key: 'vq', title: 'Video export queue', count: 1 }),
+      ],
+      nextCursor: undefined,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Dark mode toggle');
+
+    // No nudge before typing.
+    expect(screen.queryByTestId('similar-nudge')).toBeNull();
+
+    await user.type(screen.getByTestId('title-input'), 'Please add a dark mode');
+
+    // The near-duplicate surfaces; the unrelated row does not.
+    const nudge = await screen.findByTestId('similar-nudge');
+    const items = within(nudge).getAllByTestId('similar-item');
+    expect(items.map((i) => i.textContent)).toContain('Dark mode toggle');
+    expect(items.map((i) => i.textContent)).not.toContain('Video export queue');
+
+    // It is a SOFT nudge — Post stays enabled and still works.
+    expect(screen.getByTestId('submit-btn')).not.toBeDisabled();
+    await user.click(screen.getByTestId('submit-btn'));
+    await waitFor(() =>
+      expect(h.shared.append).toHaveBeenCalledWith({ title: 'Please add a dark mode' }),
+    );
+  });
+});
+
+describe('footer copy', () => {
+  it('states multi-vote + the review loop, and drops the ambiguous "one vote per person"', async () => {
+    render(<App />);
+    await screen.findByText('No requests yet');
+    // The disambiguated multi-vote copy.
+    expect(screen.getByText(/one vote each/)).toBeInTheDocument();
+    // The expectation-setting feedback line so the board doesn't read as a void.
+    expect(screen.getByText(/The team reviews the top requests\./)).toBeInTheDocument();
+    // The old ambiguous line is gone.
+    expect(screen.queryByText(/One vote per person/)).toBeNull();
   });
 });
 
@@ -369,7 +536,7 @@ describe('edit own request', () => {
 });
 
 describe('withdraw', () => {
-  it('shows withdraw only on the viewer\'s own rows and removes on click', async () => {
+  it('shows withdraw only on the viewer\'s own rows and removes after confirming', async () => {
     h.shared.list.mockResolvedValue({
       items: [
         makeItem({ key: 'mine', title: 'My idea', authorUserId: 7777, count: 1 }),
@@ -387,10 +554,53 @@ describe('withdraw', () => {
     expect(within(mineRow).getByTestId('withdraw-btn')).toBeInTheDocument();
     expect(within(theirsRow).queryByTestId('withdraw-btn')).toBeNull();
 
+    // Clicking Withdraw does NOT delete immediately — it opens a confirm dialog.
     await user.click(within(mineRow).getByTestId('withdraw-btn'));
+    expect(h.shared.withdraw).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByTestId('withdraw-confirm')).toBeInTheDocument();
+
+    // Confirming performs the destructive delete.
+    await user.click(within(dialog).getByTestId('withdraw-confirm-btn'));
     expect(h.shared.withdraw).toHaveBeenCalledWith('mine');
     await waitFor(() => expect(screen.queryByText('My idea')).toBeNull());
     expect(screen.getByText('Their idea')).toBeInTheDocument();
+  });
+
+  it('the confirm dialog names the vote count and Cancel aborts (no delete)', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'mine', title: 'My idea', authorUserId: 7777, count: 12 })],
+      nextCursor: undefined,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('My idea');
+
+    await user.click(screen.getByTestId('withdraw-btn'));
+    const dialog = screen.getByRole('dialog');
+    // The dialog surfaces the count so the cost is explicit before deleting.
+    expect(within(dialog).getByText(/12 votes/)).toBeInTheDocument();
+
+    // Cancel closes the dialog and performs NO delete.
+    await user.click(within(dialog).getByTestId('withdraw-cancel-btn'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(h.shared.withdraw).not.toHaveBeenCalled();
+    // The request is still on the board.
+    expect(screen.getByText('My idea')).toBeInTheDocument();
+  });
+
+  it('the confirm dialog singularizes a single vote', async () => {
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'mine', title: 'My idea', authorUserId: 7777, count: 1 })],
+      nextCursor: undefined,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('My idea');
+    await user.click(screen.getByTestId('withdraw-btn'));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/1 vote\b/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/1 votes/)).toBeNull();
   });
 });
 

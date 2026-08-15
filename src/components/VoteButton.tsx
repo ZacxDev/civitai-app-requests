@@ -40,8 +40,17 @@ export function VoteButton({
       aria-pressed={voted}
       aria-label={voted ? `Remove your vote (${count})` : `Up-vote (${count})`}
       leftSection={
-        <span aria-hidden="true" style={{ fontSize: 11, lineHeight: 1 }}>
-          ▲
+        // A distinct glyph per state — a check when the viewer has voted, the
+        // up-caret otherwise — so the voted state is legible on its own, not only
+        // via the fill-vs-light contrast (which some viewers can't distinguish).
+        // Purely decorative; the accurate accessible name above carries the state
+        // for assistive tech.
+        <span
+          aria-hidden="true"
+          data-testid={voted ? 'voted-indicator' : undefined}
+          style={{ fontSize: 11, lineHeight: 1 }}
+        >
+          {voted ? '✓' : '▲'}
         </span>
       }
     >
@@ -49,7 +58,7 @@ export function VoteButton({
         data-testid="vote-count"
         style={{ ...tabularNums, minWidth: 12, textAlign: 'center', fontWeight: 700 }}
       >
-        {count}
+        {voted ? `Voted · ${count}` : count}
       </span>
     </Button>
   );
