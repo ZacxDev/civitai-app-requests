@@ -1,7 +1,7 @@
 {
   "name": "app-requests",
   "private": true,
-  "version": "0.2.4",
+  "version": "0.2.5",
   "type": "module",
   "description": "Civitai App (page app) — a community voting board for new app/feature requests, built on the cross-user shared storage platform (useSharedStorage). No Buzz, no generation.",
   "license": "MIT",
