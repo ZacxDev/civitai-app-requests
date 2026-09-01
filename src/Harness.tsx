@@ -1,12 +1,23 @@
 import { useState, type CSSProperties, type ReactNode } from 'react';
 
+import { OWNER_USER_ID } from './moderation.js';
 import {
   Harness as SdkHarness,
   type MockHostOptions,
   type MockSharedSeed,
 } from '@civitai/blocks-react/testing';
 
-import { elevate, radius, token } from './theme.js';
+// 🔴 The mock chrome deliberately does NOT use the app's palette. Those tokens
+// (`--ar-*`) are written INLINE on the block root, which is a descendant of this
+// chrome, so they do not resolve out here — and more importantly the chrome must
+// read as unmistakably NOT the app. Fixed dev-only colours, never shipped to a
+// viewer (this file is only mounted under VITE_DEV_HARNESS).
+const CHROME_TEXT = '#c9d1d9';
+const CHROME_DIM = '#8b949e';
+const CHROME_ACCENT = '#3fb950';
+const CHROME_BORDER = '#30363d';
+const CHROME_BG = '#161b22';
+const CHROME_BG_RAISED = '#21262d';
 
 // A seeded, cross-user board so the local harness looks like a live one. Author
 // ids other than the viewer (7777) exercise the "user #N" label; the viewer's
@@ -48,6 +59,9 @@ export function Harness({ children }: { children: ReactNode }) {
   // We pin the viewer id to 7777 so the seeded "own" entry shows the withdraw
   // affordance. `null` exercises the anonymous read-only path.
   const [anon, setAnon] = useState(false);
+  // Preview the OWNER's view (the suppression affordance) without being the
+  // owner. Mock-host only — the real host mints the real viewer id.
+  const [asOwner, setAsOwner] = useState(false);
   const [failNext, setFailNext] = useState(0);
   const [key, setKey] = useState(0);
 
@@ -59,7 +73,11 @@ export function Harness({ children }: { children: ReactNode }) {
     new URLSearchParams(window.location.search).get('seed') === 'empty';
 
   const options: MockHostOptions = {
-    viewer: anon ? null : { id: 7777, username: 'dev-viewer' },
+    viewer: anon
+      ? null
+      : asOwner
+        ? { id: OWNER_USER_ID, username: 'app-owner' }
+        : { id: 7777, username: 'dev-viewer' },
     shared: { seed: emptySeed ? [] : SHARED_SEED, failNext: failNext || undefined },
     theme: 'dark',
   };
@@ -77,6 +95,11 @@ export function Harness({ children }: { children: ReactNode }) {
           setAnon((a) => !a);
           setKey((k) => k + 1);
         }}
+        asOwner={asOwner}
+        onToggleOwner={() => {
+          setAsOwner((o) => !o);
+          setKey((k) => k + 1);
+        }}
         onFailNext={() => {
           setFailNext(1);
           setKey((k) => k + 1);
@@ -84,6 +107,7 @@ export function Harness({ children }: { children: ReactNode }) {
         onReset={() => {
           setFailNext(0);
           setAnon(false);
+          setAsOwner(false);
           setKey((k) => k + 1);
         }}
       />
@@ -98,12 +122,16 @@ export function Harness({ children }: { children: ReactNode }) {
 
 function ScenarioPanel({
   anon,
+  asOwner,
   onToggleAnon,
+  onToggleOwner,
   onFailNext,
   onReset,
 }: {
   anon: boolean;
+  asOwner: boolean;
   onToggleAnon: () => void;
+  onToggleOwner: () => void;
   onFailNext: () => void;
   onReset: () => void;
 }) {
@@ -113,6 +141,9 @@ function ScenarioPanel({
       <div style={panelBodyStyle}>
         <button type="button" style={btnStyle} onClick={onToggleAnon}>
           {anon ? 'sign in (viewer)' : 'sign out (anon)'}
+        </button>
+        <button type="button" style={btnStyle} onClick={onToggleOwner}>
+          {asOwner ? 'view as member' : 'view as app owner'}
         </button>
         <button type="button" style={btnStyle} onClick={onFailNext}>
           fail next mutation
@@ -125,12 +156,8 @@ function ScenarioPanel({
   );
 }
 
-// Dev-only mock chrome. Colors resolve to `--civitai-*` tokens (via ./theme, on a
-// `data-theme="dark"` root) so there are ZERO hardcoded colors here either — the
-// terminal-mono look comes from the monospace font + an elevate() tint, not hex.
+// Dev-only mock chrome — fixed colours by design (see the note at the top).
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-const CHROME_BG = elevate(16);
-const CHROME_BG_RAISED = elevate(24);
 
 const rootStyle: CSSProperties = { position: 'relative', minHeight: '100dvh' };
 const bannerStyle: CSSProperties = {
@@ -140,14 +167,14 @@ const bannerStyle: CSSProperties = {
   right: 0,
   zIndex: 10000,
   background: CHROME_BG,
-  color: token.success,
+  color: CHROME_ACCENT,
   fontFamily: MONO,
   fontSize: 12,
   fontWeight: 600,
   textAlign: 'center',
   padding: '4px 8px',
   letterSpacing: 0.3,
-  borderBottom: `1px solid ${token.border}`,
+  borderBottom: `1px solid ${CHROME_BORDER}`,
 };
 const panelStyle: CSSProperties = {
   position: 'fixed',
@@ -155,21 +182,21 @@ const panelStyle: CSSProperties = {
   left: 8,
   zIndex: 10000,
   background: CHROME_BG,
-  color: token.dimmed,
+  color: CHROME_DIM,
   fontFamily: MONO,
   fontSize: 11,
   padding: '6px 10px',
-  borderRadius: radius.md,
-  border: `1px solid ${token.border}`,
+  borderRadius: 10,
+  border: `1px solid ${CHROME_BORDER}`,
   maxWidth: 220,
 };
-const summaryStyle: CSSProperties = { cursor: 'pointer', color: token.success, letterSpacing: 0.3 };
+const summaryStyle: CSSProperties = { cursor: 'pointer', color: CHROME_ACCENT, letterSpacing: 0.3 };
 const panelBodyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 };
 const btnStyle: CSSProperties = {
   background: CHROME_BG_RAISED,
-  color: token.text,
-  border: `1px solid ${token.border}`,
-  borderRadius: radius.sm,
+  color: CHROME_TEXT,
+  border: `1px solid ${CHROME_BORDER}`,
+  borderRadius: 6,
   fontFamily: MONO,
   fontSize: 11,
   padding: '3px 6px',

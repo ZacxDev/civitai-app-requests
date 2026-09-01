@@ -11,5 +11,69 @@ body {
   margin: 0;
 }
 
-/* The W6 component pack owns most styling via CSS vars scoped to [data-theme].
-   These are just page-level resets; the app root sets data-theme itself. */
+/* ---- motion ----
+
+   Keyframes referenced by `animationFor()` in src/motion.ts. The JS is the
+   tested mechanism: it resolves `animation` to the literal string `none` when
+   the viewer prefers reduced motion, so nothing is scheduled at all. The media
+   query below is defence in depth for anything that ever animates without going
+   through that helper — it is NOT what the reduced-motion tests assert against,
+   because a media query in a stylesheet proves nothing about what the app does.
+
+   Every duration is supplied by the JS and capped at 200ms there. */
+
+@keyframes ar-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes ar-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes ar-panel-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* App-owned focus ring for hand-composed controls (the pack styles its own).
+   Under `brandDepth: skin` the UA default ring can land on a surface it does not
+   contrast with, so it is replaced rather than merely restyled. */
+[data-app='app-requests'] button:focus-visible,
+[data-app='app-requests'] input:focus-visible,
+[data-app='app-requests'] textarea:focus-visible,
+[data-app='app-requests'] [tabindex]:focus-visible {
+  outline: 2px solid var(--ar-focus);
+  outline-offset: 2px;
+  border-radius: 6px;
+}

@@ -1,0 +1,140 @@
+{
+  "$comment": "The app-taste pass ledger. One per app repo, committed. It is what makes the second app cheaper than the first and what makes a re-run reproducible. Schema: slug / brandDepth / hue / hero / sdkVersionAtPass / decisions[] / deferred[].",
+  "slug": "app-requests",
+  "passDate": "2026-09-01",
+  "appVersionAfterPass": "0.3.0",
+  "brandDepth": "skin",
+  "hue": "#F09800",
+  "mark": "An upward triangle inside a rounded square — a request rising as people vote for it. Source of truth is brand/README.md and brand/icon.svg; src/components/BrandMark.tsx draws the same shape inline so it paints with the first frame.",
+  "hero": {
+    "file": "src/assets/hero.svg",
+    "swap": "Replace that ONE file. src/hero.ts imports the single path and <Hero> renders whatever URL it gets; keep the 3:1 viewBox or the band letterboxes.",
+    "provenance": "Hand-authored from the brand hue and the app mark — the mark repeated as a rising vote tally.",
+    "heroPrompt": null,
+    "heroSeed": null,
+    "generated": false,
+    "whyNotGenerated": "civitai generate spends real Buzz and cannot be undone. The operator is producing the final art separately, so this pass ships a committed placeholder rather than the intent to render one. When the real asset lands, record its prompt and seed in heroPrompt/heroSeed so it stays reproducible."
+  },
+  "sdkVersionAtPass": {
+    "before": { "@civitai/blocks-react": "0.37.0", "@civitai/app-sdk": "0.28.0", "@civitai/theme": "0.2.0", "@civitai/components-react": "0.3.0" },
+    "after": { "@civitai/blocks-react": "0.43.1", "@civitai/app-sdk": "0.35.0", "@civitai/theme": "0.2.1", "@civitai/components-react": "0.3.1" },
+    "whyBumped": "0.37.0 exposes list/getCount/getCounts/append/update/vote/unvote/withdraw and NOTHING else. The pass needed three things it does not have: `viewerVoted` on a listed row (the double-click-unvote fix), `report()` (the escalation half of moderation) and `get()`. Verified present in the INSTALLED .d.ts after the bump, not assumed from the monorepo."
+  },
+
+  "decisions": [
+    {
+      "id": "brand-depth-skin",
+      "decision": "Full skin — the app declares its own surface/border/text ramp instead of inheriting --civitai-color-*, and re-points the pack's tokens at it so pack components read as one system.",
+      "constraint": "Nothing forced this; it is the operator's settled choice. The COST it forces is real though: light/dark correctness transferred from the platform to this app.",
+      "consequence": "Every text-on-surface pair is asserted in BOTH themes by src/brand.test.ts using a real WCAG contrast implementation (itself validated against the defined 21:1 and 1:1 endpoints plus a negative control), and src/theme.test.tsx asserts the values actually reach the DOM and CHANGE when the host flips [data-theme]."
+    },
+    {
+      "id": "brand-edge-token",
+      "decision": "Added a `brandEdge` token — a darkened brand used only as the outline of a brand-filled control.",
+      "constraint": "Measured: #F09800 on white is 2.28:1, below WCAG 1.4.11's 3:1 for a control's visual boundary. In light theme a brand-filled button would have no perceivable edge against the page.",
+      "consequence": "brandEdge is #C97F00 in light (3.22:1 on white) and equals brand in dark, where the fill already contrasts at 7.73:1."
+    },
+    {
+      "id": "top-is-default",
+      "decision": "Top-by-votes is the default order; Newest is the alternative.",
+      "constraint": "There is no server-side sort — list() is newest-first with only prefix/limit/cursor. So Top is a client-side ranking over a bounded scan, and making it the default moves that scan onto cold boot.",
+      "consequence": "Mitigated rather than paid: refreshList paints page 1 and clears `loading` BEFORE continuing the scan in the background, so first paint still costs exactly ONE round-trip. Pinned by a test that holds page 2 in flight and asserts the row is on screen with `scanning` visible. The scan budget was NOT retuned — it stays 8 pages x 25 = 200 rows — because the budget no longer sits on the critical path."
+    },
+    {
+      "id": "one-horizon-one-voice",
+      "decision": "The ranking and the search share ONE disclosure, in src/disclosure.ts, reusing the wording the previous version established for Top rather than inventing a second voice for search.",
+      "constraint": "Client-side search inherits the scan horizon exactly as the ranking does, and the failure is worse: a filter that silently misses row 201 reads as 'no such request exists'.",
+      "consequence": "horizonNote() copy is pinned by LITERAL strings in disclosure.test.ts, so a reword is a deliberate act visible in the diff. horizonModeFor() deliberately returns null for Newest-with-no-query — that IS the server's order, and inventing a note there would be noise that trains people to ignore the note that matters."
+    },
+    {
+      "id": "search-preserves-order",
+      "decision": "Search FILTERS and preserves the active sort; it does not re-rank on relevance.",
+      "constraint": "None — a product call.",
+      "consequence": "'Search within the most-voted requests' is the honest reading of a board whose toolbar promises an order. Re-ranking would quietly break that promise."
+    },
+    {
+      "id": "composer-is-secondary",
+      "decision": "'Request an app' is a light (secondary) button in the hero that opens a composer modal; the board is the first and primary thing on screen. The submit form is no longer mounted inline.",
+      "constraint": "None — the IA phase of the pass.",
+      "consequence": "🔴 This MOVED THE CAPTURE RECIPE'S READY ANCHOR. The recipe anchored on `submit-btn`, which is now inside a modal and absent at rest. A new anchor `board-ready` was added on the toolbar, mounted at every data condition and both viewer states, and is asserted by a test."
+    },
+    {
+      "id": "menu-is-in-flow",
+      "decision": "The three-dots overflow menu renders IN FLOW (it grows the card) rather than as an absolutely-positioned popover.",
+      "constraint": "The block is an iframe with a declared height contract; the host resizes it from a ResizeObserver on the block root. An absolutely positioned panel contributes nothing to the root's measured height, so a popover on the last card would be CLIPPED — and the symptom would look like a CSS overflow bug rather than the height-contract violation it is.",
+      "consequence": "Opening the menu grows the card, which grows the root, which fires the observer, which grows the iframe. Guarded by a test that asserts the menu's position is neither absolute nor fixed."
+    },
+    {
+      "id": "delete-the-voted-set",
+      "decision": "Deleted the per-viewer KV voted-set entirely and dropped the `apps:storage:read` / `apps:storage:write` scopes it existed for.",
+      "constraint": "0.43.1 sends `viewerVoted` on every listed row, so the server is now authoritative about the viewer's own vote.",
+      "consequence": "Root-cause fix rather than a patch: the KV store was the SOURCE of the double-click-unvote bug (it knows nothing about a vote cast on another device, before the store existed, or after it was cleared). Vote state is now server truth overlaid with a session-scoped override map; a failed mutation DELETES the override so the row falls back to server truth rather than to a restored snapshot. Least privilege as a side effect: two scopes removed from the manifest."
+    },
+    {
+      "id": "owner-suppression-not-deletion",
+      "decision": "Owner moderation is a client-side soft-hide honoured from an owner-authored ledger entry, and is named 'hide'/'suppression' in the code, the analytics event and every line of UI copy.",
+      "constraint": "There is no owner-moderation capability. update() and withdraw() are AUTHOR-scoped and reject FORBIDDEN for anyone but the row's author — the app owner is not special — and report() explicitly does not hide a row.",
+      "consequence": "The targeted row still exists server-side with its text and its votes. The confirm dialog says so in as many words ('It is not deleted'). The entire security boundary is the authorUserId check on the ledger entry, because `data` is unmoderated and anyone can append a ledger-SHAPED row; a forged record is ignored as a suppression AND never rendered as a request. Both halves are tested."
+    },
+    {
+      "id": "ledger-data-is-structural-only",
+      "decision": "The suppression record carries only { kind, v, target } in `data`. The operator's reason is deliberately not persisted.",
+      "constraint": "`data` is UNMODERATED app structure — the content-safety belt runs on title/body only.",
+      "consequence": "Nothing a person typed can reach an unmoderated field through this path. Asserted by a test that pins the exact key set."
+    },
+    {
+      "id": "no-menu-for-anon",
+      "decision": "Signed-out viewers get no overflow menu at all, and no composer button.",
+      "constraint": "Anonymous viewers read but every mutation hard-rejects.",
+      "consequence": "Every item in that menu is a mutation, so offering it to a signed-out viewer would be offering an error. Voting still renders — it routes to requestSignIn() rather than to the platform."
+    },
+    {
+      "id": "hero-text-is-fixed-colour",
+      "decision": "The hero band's title, tagline and scrim are fixed light-on-dark values, NOT theme tokens.",
+      "constraint": "That text sits on the ARTWORK, not on a themed surface.",
+      "consequence": "A deliberate, documented exception to 'nothing hardcodes a colour a theme should flip' — flipping it would make it unreadable in one of the two themes. The dual-theme test excludes the hero subtree explicitly and says why, so the exception is visible rather than a hole."
+    }
+  ],
+
+  "deferred": [
+    {
+      "id": "comments",
+      "ask": "Threaded comments (or replies) on a request.",
+      "shipped": false,
+      "blockedBy": "platform",
+      "reason": "append() returns a HOST-MINTED, opaque key and the block cannot supply or prefix one, so list({ prefix }) cannot scope child records to a parent. Comments would have to be ordinary entries tagged inside the app-owned `data` blob and filtered client-side, which puts children into the same paginated stream as parents — halving effective board capacity — and makes any per-parent comment COUNT correct only within the scanned window. Given this app now defaults to a bounded-scan ranking, that is a wrong number on every card, which is worse than no number. No comment count was added for the same reason.",
+      "closingCondition": "A parent-scoped key (a caller-supplied prefix on append, or a parentKey field on the entry) OR a dedicated comments API appears in the INSTALLED node_modules/@civitai/blocks-react/dist/hooks/useSharedStorage.d.ts at the version this app pins.",
+      "checkedBy": "Mechanical: `grep -E 'parentKey|prefix\\?: string' node_modules/@civitai/blocks-react/dist/hooks/useSharedStorage.d.ts` after an SDK bump, in the phase-0 step of the next taste pass on this app. Exit 0 with a parent-scoping member present closes it."
+    },
+    {
+      "id": "requester-identity",
+      "ask": "Show WHO posted a request — a username and a link to their profile.",
+      "shipped": false,
+      "blockedBy": "platform",
+      "reason": "A listed item carries authorUserId as a bare number and no message type resolves a user. The only identity scope is user:read:self, which reads the VIEWER, not the author of a row. The two workarounds both have teeth: denormalising a handle at write time CANNOT retrofit the rows already in production (the board would read as mixed for a long time) and a username is arguably user-controlled text, which must not go in the unmoderated `data` blob; deriving a handle from the id is uniform but is never the person's real identity and cannot link to a profile. The card therefore keeps the existing minimal author label ('you' vs 'A Civitai member') and no identity block was added.",
+      "closingCondition": "A user-lookup message type AND a scope that grants it (something that resolves an arbitrary authorUserId, not user:read:self) both appear in a PUBLISHED @civitai/app-sdk version.",
+      "checkedBy": "Mechanical, the same way: after an SDK bump, read the installed app-sdk .d.ts for a user-lookup member and the manifest scope enum for the matching scope, in the next pass's phase 0. Both present closes it."
+    }
+  ],
+
+  "platformFindingsToWriteBack": [
+    {
+      "finding": "The mock host does NOT reject anonymous SHARED mutations. `createMockHost` computes `const mockUserId = viewer?.id ?? 0` and no SHARED_* handler checks for a viewer, so with `viewer: null` an append/vote succeeds and is attributed to user 0.",
+      "contradicts": "platform-constraints.md §7, which says anonymous mutations hard-reject and 'the mock host supports it'.",
+      "consequence": "The anonymous REJECT path cannot be exercised end-to-end against the mock. What IS testable — and what this app tests — is that the app offers a signed-out viewer no mutation affordance at all.",
+      "measuredAt": "@civitai/blocks-react@0.43.1, dist/internal/mockHost.js"
+    },
+    {
+      "finding": "`shared.failNext` also covers SHARED_GET and SHARED_REPORT, not only append/vote/unvote/withdraw as its own doc-comment says.",
+      "contradicts": "The MockSharedScenario.failNext doc-comment in the installed .d.ts.",
+      "consequence": "Useful — it is what makes the rejected-report path testable. Validated as a real instrument here: with failNext:0 the rejected-vote test goes RED, with failNext:1 it goes green.",
+      "measuredAt": "@civitai/blocks-react@0.43.1, dist/internal/mockHost.js"
+    },
+    {
+      "finding": "The canonical SDK pairing at blocks-react 0.43.1 is app-sdk ^0.35.0 (from every starter in civitai-app-starters), not the peer range's floor of >=0.29.0.",
+      "contradicts": "Nothing — it was simply not recorded, and the peer range is wide enough to resolve a mismatched pair.",
+      "consequence": "Pin both together.",
+      "measuredAt": "civitai-app-starters/starters/*/package.json"
+    }
+  ]
+}

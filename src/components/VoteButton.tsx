@@ -1,14 +1,21 @@
 // The up-vote control — a compact toggle composed from the pack's `<Button>`, so
-// every hover / focus / active / disabled state (and the theming) comes from the
-// design system for free rather than a hand-rolled clickable element.
+// every hover / focus / active / disabled state comes from the design system.
+// Under the app's skin the pack reads the app-owned `--civitai-color-*` values
+// the block root writes, so this button is brand-coloured without hardcoding a
+// colour here.
 //
-// It is deliberately PRESENTATIONAL: the optimistic count, the double-click
-// guard, the anon → sign-in nudge, and the vote/unvote reconciliation all live in
-// <App/> (which owns the shared-storage seam). This component just renders the
-// current state and forwards the click — so the app's tested vote flow is
-// unchanged by the design pass.
+// It stays deliberately PRESENTATIONAL: the optimistic count, the in-flight
+// guard, the anon → sign-in nudge and the server reconciliation all live in
+// <App/>, which owns the shared-storage seam.
+//
+// 🔴 The `voted` prop is now hydrated from the server's `viewerVoted` rather
+// than from a client-side guess. See App.tsx `isVoted()` — that change is the
+// double-click-to-unvote fix and this component must never re-derive it.
+
+import type { CSSProperties } from 'react';
 
 import { Button } from '@civitai/blocks-react/ui';
+import { useReducedMotion, transitionFor } from '../motion.js';
 import { tabularNums } from '../theme.js';
 
 export interface VoteButtonProps {
@@ -28,6 +35,8 @@ export function VoteButton({
   onClick,
   'data-testid': testId = 'vote-btn',
 }: VoteButtonProps): React.JSX.Element {
+  const reduced = useReducedMotion();
+
   return (
     <Button
       size="sm"
@@ -37,14 +46,20 @@ export function VoteButton({
       onClick={onClick}
       data-testid={testId}
       data-voted={voted ? 'true' : 'false'}
+      data-motion={reduced ? 'reduced' : 'full'}
       aria-pressed={voted}
       aria-label={voted ? `Remove your vote (${count})` : `Up-vote (${count})`}
+      style={{
+        // Interruptible and short: the fill swap on toggle should feel like a
+        // response, not a scene change.
+        transition: transitionFor(['background-color', 'color', 'transform'], 'control', reduced),
+        ...pillStyle,
+      }}
       leftSection={
-        // A distinct glyph per state — a check when the viewer has voted, the
-        // up-caret otherwise — so the voted state is legible on its own, not only
-        // via the fill-vs-light contrast (which some viewers can't distinguish).
-        // Purely decorative; the accurate accessible name above carries the state
-        // for assistive tech.
+        // A distinct glyph per state — the app's own upward triangle when not
+        // voted, a check when voted — so the state is legible without relying on
+        // the fill-vs-light contrast alone. Decorative; the accurate accessible
+        // name above carries the state for assistive tech.
         <span
           aria-hidden="true"
           data-testid={voted ? 'voted-indicator' : undefined}
@@ -63,3 +78,8 @@ export function VoteButton({
     </Button>
   );
 }
+
+const pillStyle: CSSProperties = {
+  borderRadius: 999,
+  flexShrink: 0,
+};
