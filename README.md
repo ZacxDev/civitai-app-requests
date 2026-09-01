@@ -18,24 +18,62 @@ the **shared-storage** platform:
   `vote()` / `unvote()` (up-only, one per user, server-enforced), `update()`
   your own entry in place (fixes a typo without losing votes), `withdraw()`
   your own entry.
-- **`useAppStorage()`** — the per-viewer KV, used to remember which entries the
-  viewer voted for (the shared API doesn't expose "did I vote"), reconciled with
-  the counts `vote()` / `unvote()` return.
-- **`user:read:self`** — to show the viewer (own entries get edit + withdraw
-  affordances; the author label shows `you` vs `user #N`).
+  Each listed row also carries **`viewerVoted`**, the server's own answer to
+  "has this viewer voted on this row" — which is what the vote button hydrates
+  from. (The app used to keep a per-viewer KV set of voted keys instead; that
+  store could not know about a vote cast on another device or before it existed,
+  which is what produced the *double-click to unvote* bug. It is gone, along
+  with the two `apps:storage:*` scopes it needed.)
+- **`report(key)`** — files a row for **Civitai moderator** review. Filing a
+  report does not hide the row; a moderator decides.
+- **`user:read:self`** — to identify the viewer (own entries get edit +
+  withdraw; the app owner additionally gets the hide affordance below).
 - **`useBlockAnalytics()`** — fire-and-forget submit / vote / withdraw / edit /
   sort / error-boundary events to the host's analytics pipeline.
 
 No Buzz, no generation. Scopes (must match `block.manifest.json`):
-`apps:storage:read`, `apps:storage:write` (the per-viewer KV),
 `apps:storage:shared:read`, `apps:storage:shared:write` (the cross-user board),
 and `user:read:self`.
 
-**Sorting.** The board defaults to **Newest** (the server's truthful order).
-**Top** ranks by vote count; because the server exposes no rank/order param, Top
-runs a *bounded whole-board scan* (pages forward up to a cap) so a high-vote item
-on a later page still rises — and says so when the board exceeds the scan window.
-A server-side ranked read of the shared store is the proper upstream fix.
+**Sorting.** The board defaults to **Top** — which ideas people want most is the
+whole point of the board, so that is the primary object. Because the server
+exposes no rank or order param, Top is a *client-side ranking over a bounded
+scan*: the app pages forward up to 8 pages of 25 (200 rows), then ranks the
+whole loaded window. First paint still costs exactly **one** round-trip — page 1
+is rendered before the scan continues in the background — so making Top the
+default did not move the scan onto the critical path.
+
+**Search** filters the loaded rows (fuzzy, title and body, AND semantics across
+words) and preserves the active order rather than re-ranking on relevance.
+
+🔴 **Both are honest about their horizon.** Ranking and search share one
+disclosure (`src/disclosure.ts`): whenever the server still has rows the app
+never loaded, the board says so in as many words. A filter that silently misses
+a row reads as "no such request exists", which is a lie the board cannot afford.
+A server-side ranked/searchable read of the shared store is the proper upstream
+fix.
+
+**Moderation.** Any signed-in viewer can **Report** a row to Civitai moderators.
+The app owner additionally gets **Hide from board** — and that is a *suppression*,
+not a deletion. The platform gives an app owner no delete (`update`/`withdraw`
+are author-scoped and reject `FORBIDDEN` for anyone else), so a hide is an
+owner-authored ledger entry that every client honours by filtering the target
+out. **The request, its text and its votes remain on the server.** The security
+boundary is the `authorUserId` check on that entry — anyone can append a
+ledger-*shaped* row, because `data` is unmoderated — so a forged record is
+ignored as a suppression and is never rendered as a request either. See
+`src/moderation.ts`.
+
+**Brand.** The app runs at `brandDepth: skin` (see `taste.json`): it owns its
+own palette (`src/brand.ts`) rather than inheriting the host's `--civitai-*`
+surface tokens, and re-points the design-system pack at it so pack components
+read as one system. That transfers light/dark correctness to this repo, so every
+text-on-surface pair is asserted in **both** themes against a real WCAG contrast
+implementation. The host still supplies the theme via `[data-theme]` on the
+block root — only the values behind it are the app's.
+
+**Hero.** `src/assets/hero.svg`, rendered by `<Hero>`. Swapping it is a one-file
+change; nothing else references the artwork.
 
 **Resilience.** The app root wraps a recoverable error boundary inside a
 `BlockGate`, so a single malformed row can't white-screen the iframe (a **Try
@@ -70,13 +108,21 @@ npm run test    # vitest: pure-logic (node) + component/e2e (jsdom) suites
 npm run build   # tsc --noEmit && vite build → dist/
 ```
 
-Tests mock the SDK storage hooks for deterministic coverage of every flow
-(submit → append + refresh, list + load-more, vote/unvote optimistic +
-reconcile, one-vote-per-user, own-row edit via `update()` + own-row withdraw,
-Top cross-page ranking, trust-gate + content errors, SegmentedControl tablist
-a11y, `--civitai-color-*` token-render smoke, recoverable error boundary, anon
-read-only), plus an e2e suite that drives the real `<App/>` against the SDK
-mock host over the actual postMessage transport.
+Coverage, in three layers:
+
+- **Unit** (node, no DOM) — the palette and its WCAG contrast in both themes,
+  the fuzzy matcher's score bands, the moderation ledger (including the forged
+  record), the horizon copy as literal strings, and the motion budget.
+- **Component** (jsdom) — every new control, including the overflow menu's full
+  keyboard contract (`aria-expanded`, roving tab index, ArrowUp/Down wrapping,
+  Home/End, Escape and item-select both restoring focus to the trigger).
+- **Integration** against the SDK mock host over the real postMessage transport,
+  including **failure injection** (`shared.failNext` forces `SHARED_UNAVAILABLE`
+  — the rejected vote, append and report paths) and the anonymous viewer.
+
+Both themes and `prefers-reduced-motion` are asserted *behaviourally* against
+the mounted app — what the elements do, never that an attribute or a media query
+exists.
 
 ## Submit
 
