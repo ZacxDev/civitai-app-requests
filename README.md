@@ -72,8 +72,15 @@ text-on-surface pair is asserted in **both** themes against a real WCAG contrast
 implementation. The host still supplies the theme via `[data-theme]` on the
 block root — only the values behind it are the app's.
 
-**Hero.** `src/assets/hero.svg`, rendered by `<Hero>`. Swapping it is a one-file
-change; nothing else references the artwork.
+**Hero.** `src/assets/hero.jpg`, rendered by `<Hero>`. Swapping it is a one-file
+change; nothing else references the artwork. 🔴 The band does **not** render at
+the asset's aspect ratio — its height is a min-height and its width is the host
+iframe's, so `object-fit: cover` crops the artwork by a width-dependent amount
+and no composition can be relied on to keep bright art away from the title or
+the CTA. Legibility is therefore structural: a uniform scrim floor plus an
+opaque plate under the action, both measured against the brightest pixel in the
+committed asset and asserted as real WCAG ratios in `src/hero.test.ts`. Swapping
+the artwork means re-measuring `HERO_ART_BRIGHTEST`.
 
 **Resilience.** The app root wraps a recoverable error boundary inside a
 `BlockGate`, so a single malformed row can't white-screen the iframe (a **Try

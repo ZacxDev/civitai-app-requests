@@ -313,6 +313,78 @@ describe('information architecture', () => {
   });
 });
 
+// 🔴 Both of these are 0.3.1 REGRESSION tests, at the level the defects were
+// actually seen at: on the running board, not in a pure function. Each is RED on
+// 0.3.0.
+describe('0.3.1 fixes, end to end on the board', () => {
+  const mixedBoard = () => ({
+    items: [
+      // The viewer's own row...
+      makeItem({ key: 'mine', title: 'My own request', count: 5, authorUserId: 7777 }),
+      // ...and someone else's.
+      makeItem({ key: 'theirs', title: 'Their request', count: 3, authorUserId: 4021 }),
+    ],
+    nextCursor: undefined,
+  });
+
+  it('never labels a row "you" — every author reads the same', async () => {
+    // 0.3.0 rendered "you" on the viewer's own rows, so your own request looked
+    // like a different KIND of row from everyone else's.
+    h.shared.list.mockResolvedValue(mixedBoard());
+    render(<App />);
+    await screen.findByText('My own request');
+
+    const rows = screen.getAllByTestId('request-row');
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(within(row).getByText('A Civitai member')).toBeInTheDocument();
+    }
+    // Nothing anywhere on the board says it, in any casing — including the row
+    // the viewer wrote, which is the one 0.3.0 got wrong.
+    expect(within(rows[0]).queryByText(/\byou\b/i)).toBeNull();
+    expect(within(rows[1]).queryByText(/\byou\b/i)).toBeNull();
+  });
+
+  it('still recognises the viewer\'s own row through the AFFORDANCES', async () => {
+    // The seam: making the label uniform must not have taken own-post
+    // recognition with it. `authorLabel` and `isOwnEntry` stay independent.
+    h.shared.list.mockResolvedValue(mixedBoard());
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('My own request');
+
+    const own = screen.getByText('My own request').closest('[data-testid="request-row"]');
+    const other = screen.getByText('Their request').closest('[data-testid="request-row"]');
+
+    const ownMenu = await openRowMenu(user, own as HTMLElement);
+    expect(within(ownMenu).getByTestId('edit-btn')).toBeInTheDocument();
+    expect(within(ownMenu).getByTestId('withdraw-btn')).toBeInTheDocument();
+    expect(within(ownMenu).queryByTestId('report-btn')).toBeNull();
+
+    const otherMenu = await openRowMenu(user, other as HTMLElement);
+    expect(within(otherMenu).getByTestId('report-btn')).toBeInTheDocument();
+    expect(within(otherMenu).queryByTestId('edit-btn')).toBeNull();
+    expect(within(otherMenu).queryByTestId('withdraw-btn')).toBeNull();
+  });
+
+  it('seats the hero CTA on its own plate, signed in AND signed out', async () => {
+    // 0.3.0 put a `variant="light"` (86%-transparent) amber button straight onto
+    // the artwork's brightest region. The plate is what gives it a backdrop.
+    h.shared.list.mockResolvedValue(mixedBoard());
+    const { unmount } = render(<App />);
+    await screen.findByText('My own request');
+    expect(screen.getByTestId('hero-action')).toContainElement(
+      screen.getByTestId('open-composer-btn'),
+    );
+    unmount();
+
+    h.ctx.viewer = null;
+    render(<App />);
+    await screen.findByText('My own request');
+    expect(screen.getByTestId('hero-action')).toContainElement(screen.getByTestId('signin-btn'));
+  });
+});
+
 describe('search', () => {
   const board = () => ({
     items: [

@@ -5,20 +5,52 @@ import type { SharedListItem } from '@civitai/blocks-react';
 
 export type SortMode = 'top' | 'newest';
 
+/** The one author label every row gets. Exported so tests pin the string, not a shape. */
+export const AUTHOR_LABEL = 'A Civitai member';
+
 /**
- * How to label the author of a request. The block can't resolve usernames (no
- * catalog lookup for arbitrary user ids), so we show `you` for the viewer and a
- * neutral, human "A Civitai member" for everyone else — the raw numeric id
- * (`user #4021`) read as an internal database handle, not a person, and dogfood
- * feedback flagged it as unfriendly. Attribution stays viewer-vs-other; only the
- * un-resolvable label is humanized.
+ * How to label the author of a request — UNIFORM for every row, including the
+ * viewer's own.
+ *
+ * 🔴 Deliberately takes both ids and ignores both. Keeping the parameters is not
+ * an oversight: it keeps the call site honest about what a label COULD depend on
+ * if the platform ever grew a user lookup, and it keeps the "no branch on the
+ * viewer" property visible right here rather than spread over the call sites.
+ *
+ * Why uniform. Real per-user identity is platform work, not app work: a listed
+ * row carries `authorUserId` as a bare number, no message type resolves a user,
+ * and the only identity scope is `user:read:self` — which reads the VIEWER, not
+ * the author of a row. So the honest choices were a viewer/other split or one
+ * label for everyone.
+ *
+ * 0.3.0 shipped the split and rendered `you` on the viewer's own rows. It read
+ * badly for the reason self-reference usually does: the viewer's row looked like
+ * a different KIND of row from everyone else's, in a board whose whole point is
+ * that every request is equal until people vote. Uniform is also the shape that
+ * survives identity landing later — every row gets a handle at once, rather than
+ * "you" being special-cased forever.
+ *
+ * 🔴 This is a LABEL decision and nothing else. Own-post recognition comes from
+ * the AFFORDANCES — edit and withdraw appear only on your own rows — which are
+ * gated by {@link isOwnEntry}. The two must stay independent: a future change
+ * that re-derives one from the other would either put `you` back on the card or
+ * hand everyone the edit menu.
  */
-export function authorLabel(authorUserId: number, viewerId: number | null | undefined): string {
-  if (viewerId != null && authorUserId === viewerId) return 'you';
-  return 'A Civitai member';
+export function authorLabel(
+  _authorUserId: number,
+  _viewerId: number | null | undefined,
+): string {
+  return AUTHOR_LABEL;
 }
 
-/** True when the viewer authored the entry (drives the withdraw affordance). */
+/**
+ * True when the viewer authored the entry (drives the edit + withdraw
+ * affordances, and the report-vs-own-actions split in the row menu).
+ *
+ * 🔴 Independent of {@link authorLabel} by design — see its doc. This is the
+ * only thing in the app that distinguishes the viewer's rows, and it must keep
+ * distinguishing them.
+ */
 export function isOwnEntry(
   authorUserId: number,
   viewerId: number | null | undefined,

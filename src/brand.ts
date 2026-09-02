@@ -178,6 +178,29 @@ export function relativeLuminance(hex: string): number {
   return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
 }
 
+/**
+ * Composite `fg` over `bg` at `alpha` (source-over) and return the resulting
+ * opaque hex.
+ *
+ * Exists because the hero band stacks TRANSLUCENT layers — a scrim over the
+ * artwork, and a `variant="light"` Button whose background is 14% primary over
+ * whatever that resolves to. `contrastRatio` takes opaque colours, so without
+ * this the only way to talk about the hero's legibility is to eyeball a
+ * screenshot, which is precisely how the 0.3.0 collision shipped. Flattening the
+ * stack first makes the claim a number.
+ *
+ * `alpha` is clamped to [0, 1]; outside that the result is not a composite of
+ * anything and a silently-extrapolated colour would fake a pass.
+ */
+export function compositeOver(fg: string, bg: string, alpha: number): string {
+  if (!Number.isFinite(alpha)) throw new Error(`alpha is not a number: ${alpha}`);
+  const a = Math.min(1, Math.max(0, alpha));
+  const f = parseHex(fg);
+  const b = parseHex(bg);
+  const mix = f.map((c, i) => Math.round(a * c + (1 - a) * b[i]));
+  return `#${mix.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
 /** WCAG 2.1 contrast ratio in [1, 21]. Symmetric. */
 export function contrastRatio(a: string, b: string): number {
   const la = relativeLuminance(a);

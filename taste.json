@@ -2,13 +2,13 @@
   "$comment": "The app-taste pass ledger. One per app repo, committed. It is what makes the second app cheaper than the first and what makes a re-run reproducible. Schema: slug / brandDepth / hue / hero / sdkVersionAtPass / decisions[] / deferred[].",
   "slug": "app-requests",
   "passDate": "2026-09-01",
-  "appVersionAfterPass": "0.3.0",
+  "appVersionAfterPass": "0.3.1",
   "brandDepth": "skin",
   "hue": "#F09800",
   "mark": "An upward triangle inside a rounded square — a request rising as people vote for it. Source of truth is brand/README.md and brand/icon.svg; src/components/BrandMark.tsx draws the same shape inline so it paints with the first frame.",
   "hero": {
     "file": "src/assets/hero.jpg",
-    "swap": "Replace that ONE file. src/hero.ts imports the single path and <Hero> renders whatever URL it gets; keep 3:1 or the band letterboxes.",
+    "swap": "Replace that ONE file. src/hero.ts imports the single path and <Hero> renders whatever URL it gets. 🔴 The band does NOT render at the asset's ratio — its height is a min-height and its width is the host iframe's, so the rendered ratio is width-dependent (~6:1 measured at desktop width against a 3:1 asset) and object-fit: cover crops the artwork by a width-dependent amount. Compose a replacement 3:1 for consistency with this one, but do NOT rely on where anything in it lands: at some viewport width it will be underneath the overlaid text or the CTA. Legibility is carried structurally by HERO_SCRIM_ALPHA + HERO_ACTION_PLATE_ALPHA, not by composition. Re-measure HERO_ART_BRIGHTEST when swapping — the contrast assertions in src/hero.test.ts read that constant.",
     "provenance": "civitai generate, 2026-09-01. Workflow 8753561-20260901224419851, external id 08b2ea43-cdd4-4a25-9293-05ef7ffacfa0. Four candidates for 29 Buzz total; candidate 4 selected for having ONE clear focal point that survives at small size and the most usable left negative space.",
     "generated": true,
     "heroPrompt": "abstract minimal hero banner, ascending upward-pointing triangles rising like a vote tally, warm amber orange gradient light on deep graphite charcoal background, soft volumetric glow, clean geometric shapes, generous negative space on the left, premium product marketing backdrop, no text, no words, no letters",
@@ -18,14 +18,24 @@
     "requestedAspect": "21:9",
     "realizedDimensions": "1216x832 (~1.46:1)",
     "aspectRatioIsNotHonoured": "civitai generate IGNORED --aspect-ratio: all four candidates came back 1216x832 regardless. --dry-run echoed 'Aspect ratio: 21:9' back, which is an echo of the argument and NOT acceptance, and the flag's help claim that width/height derive from it is false client-side (--print-input shows aspectRatio carried as an opaque string with no dimensions). NOT established: whether the server clamps unknown buckets, ignores them, or rejects 21:9 for this ecosystem. Written back to the app-taste constraints reference as section 11.",
-    "compositeRecipe": "Because of the above the 3:1 band is COMPOSED, not generated to size: scale the render to 730px height, ramp the left 420px of its alpha from transparent to opaque, and composite it flush RIGHT onto a 2190x730 canvas filled with the render's own corner colour srgb(30,33,40). The alpha ramp is load-bearing — without it the fill meets the render at a visible vertical seam. The left half is intentionally empty; the title and tagline sit there."
+    "compositeRecipe": "Because of the above the 3:1 band is COMPOSED, not generated to size: scale the render to 730px height, ramp the left 420px of its alpha from transparent to opaque, and composite it flush RIGHT onto a 2190x730 canvas filled with the render's own corner colour srgb(30,33,40). The alpha ramp is load-bearing — without it the fill meets the render at a visible vertical seam. The left half is intentionally empty; the title and tagline sit there.",
+    "renderedAspectIsNotTheAssetAspect": "Measured on the live 0.3.0 app: the band laid out at roughly 810x132 CSS px on a 1709px-wide capture (~6:1) against a 2190x730 (3:1) asset. 0.3.0 exported HERO_ASPECT='3 / 1' and applied it as CSS `aspect-ratio` on an <img> that already had explicit width:100%;height:100% — so the declaration was INERT and merely documented a guarantee the layout never made. 0.3.1 replaces it with HERO_SOURCE_ASPECT_RATIO (a number, a fact about the file, applied to nothing)."
   },
   "sdkVersionAtPass": {
-    "before": { "@civitai/blocks-react": "0.37.0", "@civitai/app-sdk": "0.28.0", "@civitai/theme": "0.2.0", "@civitai/components-react": "0.3.0" },
-    "after": { "@civitai/blocks-react": "0.43.1", "@civitai/app-sdk": "0.35.0", "@civitai/theme": "0.2.1", "@civitai/components-react": "0.3.1" },
+    "before": {
+      "@civitai/blocks-react": "0.37.0",
+      "@civitai/app-sdk": "0.28.0",
+      "@civitai/theme": "0.2.0",
+      "@civitai/components-react": "0.3.0"
+    },
+    "after": {
+      "@civitai/blocks-react": "0.43.1",
+      "@civitai/app-sdk": "0.35.0",
+      "@civitai/theme": "0.2.1",
+      "@civitai/components-react": "0.3.1"
+    },
     "whyBumped": "0.37.0 exposes list/getCount/getCounts/append/update/vote/unvote/withdraw and NOTHING else. The pass needed three things it does not have: `viewerVoted` on a listed row (the double-click-unvote fix), `report()` (the escalation half of moderation) and `get()`. Verified present in the INSTALLED .d.ts after the bump, not assumed from the monorepo."
   },
-
   "decisions": [
     {
       "id": "brand-depth-skin",
@@ -100,7 +110,6 @@
       "consequence": "A deliberate, documented exception to 'nothing hardcodes a colour a theme should flip' — flipping it would make it unreadable in one of the two themes. The dual-theme test excludes the hero subtree explicitly and says why, so the exception is visible rather than a hole."
     }
   ],
-
   "deferred": [
     {
       "id": "comments",
@@ -116,12 +125,11 @@
       "ask": "Show WHO posted a request — a username and a link to their profile.",
       "shipped": false,
       "blockedBy": "platform",
-      "reason": "A listed item carries authorUserId as a bare number and no message type resolves a user. The only identity scope is user:read:self, which reads the VIEWER, not the author of a row. The two workarounds both have teeth: denormalising a handle at write time CANNOT retrofit the rows already in production (the board would read as mixed for a long time) and a username is arguably user-controlled text, which must not go in the unmoderated `data` blob; deriving a handle from the id is uniform but is never the person's real identity and cannot link to a profile. The card therefore keeps the existing minimal author label ('you' vs 'A Civitai member') and no identity block was added.",
+      "reason": "A listed item carries authorUserId as a bare number and no message type resolves a user. The only identity scope is user:read:self, which reads the VIEWER, not the author of a row. The two workarounds both have teeth: denormalising a handle at write time CANNOT retrofit the rows already in production (the board would read as mixed for a long time) and a username is arguably user-controlled text, which must not go in the unmoderated `data` blob; deriving a handle from the id is uniform but is never the person's real identity and cannot link to a profile. The card therefore carries ONE uniform label, 'A Civitai member', for every row including the viewer's own, and no identity block was added. (0.3.0 shipped a 'you' vs 'A Civitai member' split; 0.3.1 removed it — see fixes_0_3_1 → author-label-is-uniform.)",
       "closingCondition": "A user-lookup message type AND a scope that grants it (something that resolves an arbitrary authorUserId, not user:read:self) both appear in a PUBLISHED @civitai/app-sdk version.",
       "checkedBy": "Mechanical, the same way: after an SDK bump, read the installed app-sdk .d.ts for a user-lookup member and the manifest scope enum for the matching scope, in the next pass's phase 0. Both present closes it."
     }
   ],
-
   "platformFindingsToWriteBack": [
     {
       "finding": "The mock host does NOT reject anonymous SHARED mutations. `createMockHost` computes `const mockUserId = viewer?.id ?? 0` and no SHARED_* handler checks for a viewer, so with `viewer: null` an append/vote succeeds and is attributed to user 0.",
@@ -140,6 +148,38 @@
       "contradicts": "Nothing — it was simply not recorded, and the peer range is wide enough to resolve a mismatched pair.",
       "consequence": "Pin both together.",
       "measuredAt": "civitai-app-starters/starters/*/package.json"
+    }
+  ],
+  "fixes_0_3_1": [
+    {
+      "id": "hero-scrim-is-a-floor-not-a-ramp",
+      "decision": "The hero scrim is a UNIFORM background-color floor (HERO_SCRIM_ALPHA=0.55) with the directional ramp demoted to background-image decoration on top of it.",
+      "constraint": "The band's rendered aspect ratio is a function of viewport width, so object-fit: cover crops the artwork differently at every width and the bright region lands wherever it lands. A directional scrim therefore has a weakest point at a FIXED place in the frame while the art underneath it moves — which is not tunable.",
+      "consequence": "0.3.0's ramp was rgba(18,14,8,0.88) at the left and 0.42 at the RIGHT — its weakest point was exactly where the artwork's focal point and the CTA both sit. Measured against the brightest pixel in the committed asset (#F7A86F, enumerated not eyeballed): the tagline was 3.38:1 there, under WCAG AA. The floor puts it at 4.72:1 and the title at 6.41:1, at EVERY point of the band. background-image can only paint on top of background-color, so the floor is a floor by construction rather than by keeping a list in the right order."
+    },
+    {
+      "id": "cta-needs-a-plate-not-just-a-scrim",
+      "decision": "The hero's action slot renders inside an opaque backing plate (HERO_ACTION_PLATE_ALPHA=0.9) with a neutral hairline and a drop shadow.",
+      "constraint": "The CTA is a `variant=\"light\"` Button, whose background is `color-mix(in srgb, var(--civitai-color-primary) 14%, transparent)` — 86% TRANSPARENT — with an amber label. It has no surface of its own, so whatever is behind the band is its background.",
+      "consequence": "This is the half a band-wide scrim cannot fix, and it is the defect the operator actually saw: amber text on amber art. Measured at 0.3.0's right-edge scrim over the brightest pixel, the label scored 1.90:1 against its own background — a hard fail. With the plate it is 5.57:1. The hairline is deliberately NEUTRAL, not brand amber: an amber ring reads as the button's own outline and would make the CTA look primary, contradicting composer-is-secondary. The plate is only ~1.9:1 against the scrimmed band, so its OUTER edge is carried by the shadow and is not claimed to meet WCAG 1.4.11."
+    },
+    {
+      "id": "hero-band-is-fixed-dark",
+      "decision": "The band's own background is a fixed dark ink (HERO_BAND_INK) in both themes, replacing token.surface2.",
+      "constraint": "The band's text is fixed light because it sits on the artwork — a documented exception (hero-text-is-fixed-colour). That premise silently broke on the image-failure path: token.surface2 is #FDF3E3 in LIGHT theme, so a 404'd hero left fixed-light text on a near-white band at 2.88:1.",
+      "consequence": "Found while fixing the scrim, not reported by anyone — the existing image-error test asserted the text was still PRESENT, never that it was legible. Now 17.67:1 on that path, and src/hero.test.ts asserts the image-failed case in its own right."
+    },
+    {
+      "id": "object-position-is-chosen",
+      "decision": "HERO_OBJECT_POSITION = '100% 10%', set explicitly on the <img>.",
+      "constraint": "At wide widths the cover-crop is vertical and the default (50% 50%) sliced the arrowhead off the top. At narrow widths the crop flips HORIZONTAL, and the asset's left half is deliberately empty fill.",
+      "consequence": "Right-anchored keeps the subject on screen when the crop is horizontal; near-top keeps the arrowhead inside the window when it is vertical (with the visible fraction as low as 40% the window is [4%,44%] and the tip sits at ~13.5%). 🔴 It does NOT move the focal point away from the CTA — with the band wider than 3:1 there is no horizontal slack at all, so both are hard-right no matter what. That is precisely why the scrim and the plate, not the crop, are the fix."
+    },
+    {
+      "id": "author-label-is-uniform",
+      "decision": "authorLabel() returns 'A Civitai member' for every row, including the viewer's own. It keeps both parameters and ignores both.",
+      "constraint": "Real per-user identity is platform work (deferred → requester-identity): a listed row carries authorUserId as a bare number, nothing resolves a user, and the only identity scope is user:read:self, which reads the VIEWER.",
+      "consequence": "0.3.0's viewer/other split rendered 'you' on your own rows, so your request looked like a different KIND of row on a board whose point is that every request is equal until people vote. Uniform is also the shape that survives identity landing later. Own-post recognition moves entirely to the AFFORDANCES — edit/withdraw appear only on your own rows — gated by isOwnEntry, which stays INDEPENDENT of the label; format.test.ts pins the relationship (label flat, gate varying) over the same inputs rather than testing each side alone."
     }
   ]
 }
