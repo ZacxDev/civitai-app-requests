@@ -7,13 +7,18 @@
   "hue": "#F09800",
   "mark": "An upward triangle inside a rounded square — a request rising as people vote for it. Source of truth is brand/README.md and brand/icon.svg; src/components/BrandMark.tsx draws the same shape inline so it paints with the first frame.",
   "hero": {
-    "file": "src/assets/hero.svg",
-    "swap": "Replace that ONE file. src/hero.ts imports the single path and <Hero> renders whatever URL it gets; keep the 3:1 viewBox or the band letterboxes.",
-    "provenance": "Hand-authored from the brand hue and the app mark — the mark repeated as a rising vote tally.",
-    "heroPrompt": null,
+    "file": "src/assets/hero.jpg",
+    "swap": "Replace that ONE file. src/hero.ts imports the single path and <Hero> renders whatever URL it gets; keep 3:1 or the band letterboxes.",
+    "provenance": "civitai generate, 2026-09-01. Workflow 8753561-20260901224419851, external id 08b2ea43-cdd4-4a25-9293-05ef7ffacfa0. Four candidates for 29 Buzz total; candidate 4 selected for having ONE clear focal point that survives at small size and the most usable left negative space.",
+    "generated": true,
+    "heroPrompt": "abstract minimal hero banner, ascending upward-pointing triangles rising like a vote tally, warm amber orange gradient light on deep graphite charcoal background, soft volumetric glow, clean geometric shapes, generous negative space on the left, premium product marketing backdrop, no text, no words, no letters",
+    "heroNegativePrompt": "text, words, letters, watermark, signature, logo, ui, screenshot, clutter, people, faces",
     "heroSeed": null,
-    "generated": false,
-    "whyNotGenerated": "civitai generate spends real Buzz and cannot be undone. The operator is producing the final art separately, so this pass ships a committed placeholder rather than the intent to render one. When the real asset lands, record its prompt and seed in heroPrompt/heroSeed so it stays reproducible."
+    "whyNoSeed": "The CLI reports no per-image seed on the workflow result, so the render is reproducible only via the workflow id above (`civitai workflows get 8753561-20260901224419851`), not by re-running the prompt.",
+    "requestedAspect": "21:9",
+    "realizedDimensions": "1216x832 (~1.46:1)",
+    "aspectRatioIsNotHonoured": "civitai generate IGNORED --aspect-ratio: all four candidates came back 1216x832 regardless. --dry-run echoed 'Aspect ratio: 21:9' back, which is an echo of the argument and NOT acceptance, and the flag's help claim that width/height derive from it is false client-side (--print-input shows aspectRatio carried as an opaque string with no dimensions). NOT established: whether the server clamps unknown buckets, ignores them, or rejects 21:9 for this ecosystem. Written back to the app-taste constraints reference as section 11.",
+    "compositeRecipe": "Because of the above the 3:1 band is COMPOSED, not generated to size: scale the render to 730px height, ramp the left 420px of its alpha from transparent to opaque, and composite it flush RIGHT onto a 2190x730 canvas filled with the render's own corner colour srgb(30,33,40). The alpha ramp is load-bearing — without it the fill meets the render at a visible vertical seam. The left half is intentionally empty; the title and tagline sit there."
   },
   "sdkVersionAtPass": {
     "before": { "@civitai/blocks-react": "0.37.0", "@civitai/app-sdk": "0.28.0", "@civitai/theme": "0.2.0", "@civitai/components-react": "0.3.0" },

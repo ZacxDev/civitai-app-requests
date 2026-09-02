@@ -242,16 +242,20 @@ describe('prefers-reduced-motion', () => {
 });
 
 describe('hero slot', () => {
-  it('renders the committed placeholder artwork', async () => {
+  it('renders the committed hero artwork', async () => {
     render(<App />);
     await screen.findByText('A themed request');
     const img = screen.getByTestId('hero-image');
     const src = img.getAttribute('src') ?? '';
-    // Vite inlines a small SVG as a data URI and emits a hashed file for a big
-    // one, so accept either — what matters is that the slot resolved to real
-    // artwork rather than an empty src.
+    // The contract is that the slot RESOLVED to real artwork — not which format
+    // that artwork is in. An earlier version of this assertion pinned `.svg`,
+    // which was a fact about the placeholder rather than about the slot, and it
+    // went red the moment the real (raster) hero landed. Vite may inline a small
+    // asset as a data URI or emit a hashed file, so both shapes are legal; what
+    // must never happen is an empty src, which is what a broken import looks
+    // like and what `<Hero>`'s error path would otherwise silently absorb.
     expect(src.length).toBeGreaterThan(0);
-    expect(src).toMatch(/(^data:image\/svg\+xml)|(\.svg)/);
+    expect(src).toMatch(/^(data:image\/|\/|\.|https?:)/);
     // Decorative — the name and tagline beside it carry the meaning.
     expect(img).toHaveAttribute('alt', '');
     expect(img).toHaveAttribute('role', 'presentation');
