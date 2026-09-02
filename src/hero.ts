@@ -1,16 +1,24 @@
 // The hero artwork, in ONE place.
 //
-// 🔴 SWAPPING THE HERO IS A ONE-FILE CHANGE: replace `src/assets/hero.svg`.
-// If the replacement is a raster (png/jpg/webp), change the import path on the
-// next line and nothing else — `<Hero>` takes a URL and does not care what it
-// is. Keep a 3:1 aspect ratio (the band reserves that) or it will letterbox.
+// 🔴 SWAPPING THE HERO IS A ONE-FILE CHANGE: replace `src/assets/hero.jpg`.
+// `<Hero>` takes a URL and does not care what it is; only the import path on
+// the line below names the file. Keep a 3:1 aspect ratio (the band reserves
+// that) or it will letterbox.
 //
-// Recorded in `taste.json` under `hero`. The current asset is a hand-drawn
-// placeholder built from the brand hue and the app mark — NOT a `civitai
-// generate` render, because that spends real Buzz; the operator is producing the
-// final art separately.
+// Provenance, and the reason this file is 2190x730 rather than the 1216x832
+// that came out of the generator: `civitai generate` DOES NOT HONOUR
+// `--aspect-ratio`. A 21:9 request produced 1216x832 (~1.46:1) four times over,
+// and `--dry-run` echoed "21:9" straight back, which is an echo of the argument
+// and not acceptance. So the band is composed, not generated to size: the
+// render is scaled to the band height and composited flush RIGHT onto a 3:1
+// canvas filled with its own corner colour, with the left 420px of its alpha
+// ramped so it dissolves into the fill instead of leaving a vertical seam.
+// The left half is deliberately empty — it is where the title and tagline sit.
+//
+// Prompt, workflow id and the exact compositing recipe are in `taste.json`
+// under `hero`, so this is reproducible without re-deriving any of it.
 
-import heroUrl from './assets/hero.svg';
+import heroUrl from './assets/hero.jpg';
 
 export const HERO_IMAGE_URL: string = heroUrl;
 
