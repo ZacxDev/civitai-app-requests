@@ -2,7 +2,7 @@
   "$comment": "The app-taste pass ledger. One per app repo, committed. It is what makes the second app cheaper than the first and what makes a re-run reproducible. Schema: slug / brandDepth / hue / hero / sdkVersionAtPass / decisions[] / deferred[].",
   "slug": "app-requests",
   "passDate": "2026-09-01",
-  "appVersionAfterPass": "0.3.1",
+  "appVersionAfterPass": "0.3.2",
   "brandDepth": "skin",
   "hue": "#F09800",
   "mark": "An upward triangle inside a rounded square — a request rising as people vote for it. Source of truth is brand/README.md and brand/icon.svg; src/components/BrandMark.tsx draws the same shape inline so it paints with the first frame.",
@@ -180,6 +180,32 @@
       "decision": "authorLabel() returns 'A Civitai member' for every row, including the viewer's own. It keeps both parameters and ignores both.",
       "constraint": "Real per-user identity is platform work (deferred → requester-identity): a listed row carries authorUserId as a bare number, nothing resolves a user, and the only identity scope is user:read:self, which reads the VIEWER.",
       "consequence": "0.3.0's viewer/other split rendered 'you' on your own rows, so your request looked like a different KIND of row on a board whose point is that every request is equal until people vote. Uniform is also the shape that survives identity landing later. Own-post recognition moves entirely to the AFFORDANCES — edit/withdraw appear only on your own rows — gated by isOwnEntry, which stays INDEPENDENT of the label; format.test.ts pins the relationship (label flat, gate varying) over the same inputs rather than testing each side alone."
+    }
+  ],
+  "fixes_0_3_2": [
+    {
+      "id": "suppress-the-ua-search-clear",
+      "decision": "src/index.css sets `-webkit-appearance: none; appearance: none` on `[data-app='app-requests'] input[type='search']::-webkit-search-cancel-button` (and ::-webkit-search-decoration). The input KEEPS type='search'.",
+      "constraint": "SearchField draws its own clear button inside the field, and Chromium paints its own ::-webkit-search-cancel-button in the same place — so 0.3.1 shipped TWO ✕ controls side by side, visible in the live store capture. type='text' would have hidden the UA control by discarding the search-shaped mobile keyboard and the searchbox role the accessible-name test matches on, so the trade was refused.",
+      "consequence": "Measured in real Chromium 144 by scripts/measure-search-clear.mjs against the dev harness at 1200x778: painted ✕ clusters in the field's right-hand strip go 2 -> 1 with the field hovered, and the UA button's computed width goes 9px -> 0px. Confirmed AGAINST THE BUILT BUNDLE too, which matters — see the platform findings below. jsdom cannot see any of this; the two vitest guards added alongside are a spelled CSS assertion and a selector-resolves-to-the-input seam check, and are labelled in the file as NOT regression coverage."
+    },
+    {
+      "id": "a11y-path-was-never-doubled",
+      "decision": "No accessibility change was made. The custom clear button already carried aria-label='Clear search'.",
+      "constraint": "None — this was a measurement, and it could have gone the other way.",
+      "consequence": "Probed over CDP on BOTH 0.3.1 and 0.3.2: the full AX tree contains exactly ONE node mentioning 'clear' (button, name 'Clear search', not ignored), and Tab from the search input lands directly on that button. Chromium does not expose ::-webkit-search-cancel-button to assistive tech and does not put it in the tab order, so the defect was purely visual and the fix changes nothing for keyboard or screen-reader users. Pinned going forward by a SearchField test asserting exactly one element with that accessible name. Also checked: Escape inside the search input (a UA behaviour of type='search') clears the value AND the controlled React state follows — the clear button unmounts and the live-region summary empties — so no desync was introduced or found."
+    }
+  ],
+  "platformFindings_0_3_2": [
+    {
+      "finding": "Blink's UA stylesheet keeps ::-webkit-search-cancel-button at opacity 0 until the input is :hover or :focus. Measured: opacity 0 unhovered, 1 hovered, at a constant 9px width in both.",
+      "consequence": "🔴 A screenshot taken with the pointer parked elsewhere shows ONE ✕ on completely unfixed code. Any instrument that scripts a value into a search field and captures without hovering or focusing will report the defect as absent. This is why the measurement script drives the pointer onto the field and reports three states (empty+hover 0, filled-nohover 1, filled+hover 2 before / 1 after) rather than one number.",
+      "measuredAt": "Chromium 144.0.7559.97 (Brave 144.1.86.142), headless=new"
+    },
+    {
+      "finding": "`vite build` MINIFIES `-webkit-appearance: none` out of this rule for the project's browser target: the shipped dist CSS carries `appearance: none` alone, while the source carries both.",
+      "consequence": "A source-level guard on both spellings is not a claim about the artifact. Measured against a production build served by `vite preview`, the unprefixed property alone still gives width 0px and one painted ✕ — so unprefixed is what actually does the work in Chromium today and the prefixed line is cover for older engines only. Verifying this fix against the dev server alone would have left the shipped stylesheet unmeasured.",
+      "measuredAt": "vite 8.1.4, build.target es2022"
     }
   ]
 }

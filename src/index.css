@@ -66,6 +66,48 @@ body {
   }
 }
 
+/* ---- suppress the UA's own search-clear control ----
+
+   🔴 Every hand-composed search field in this app draws its OWN clear button
+   (see SearchField.tsx), so Blink's ::-webkit-search-cancel-button is a SECOND
+   ✕ sitting immediately to its left. 0.3.1 shipped exactly that: two clear
+   controls side by side, visible in the live store capture.
+
+   The type stays `search`. It is the correct type — it earns the search-shaped
+   virtual keyboard with a "Search" action key on mobile, and it is what makes
+   the input expose role=searchbox to assistive tech, which the accessible-name
+   test relies on. Switching to `type="text"` would hide the second ✕ by
+   throwing both of those away; suppressing the UA control keeps them.
+
+   Why this lives in a stylesheet rather than in the component: pseudo-elements
+   cannot be expressed as a React inline `style`, which is how every other
+   surface in this app is themed.
+
+   The measured effect (scripts/measure-search-clear.mjs, real Chromium 144):
+   the button's computed width goes 9px -> 0px, and the painted ✕ count in the
+   field's right-hand strip goes 2 -> 1 with the field hovered. Hover matters —
+   the UA sheet keeps this button at opacity 0 until :hover or :focus, so an
+   unhovered screenshot shows one ✕ even on broken code.
+
+   🔴 On the two spellings, measured rather than assumed: `vite build` MINIFIES
+   the `-webkit-` declaration away for this project's browser target, so the
+   shipped `dist/assets/*.css` carries `appearance: none` ALONE — and the same
+   measurement run against the built bundle still reports 0px and one ✕. So the
+   unprefixed property is what actually does the work in Chromium today; the
+   prefixed one is kept here only as cover for older WebKit/Blink, and it is
+   not present in the artifact that ships. Anyone reasoning about this from the
+   source alone would get that backwards.
+
+   ::-webkit-search-decoration is included because it is the other UA-painted
+   affordance inside a search input. It measured 0x0 here even unfixed, so this
+   half is belt-and-braces, not a fix for something observed. */
+
+[data-app='app-requests'] input[type='search']::-webkit-search-cancel-button,
+[data-app='app-requests'] input[type='search']::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 /* App-owned focus ring for hand-composed controls (the pack styles its own).
    Under `brandDepth: skin` the UA default ring can land on a surface it does not
    contrast with, so it is replaced rather than merely restyled. */

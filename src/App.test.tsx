@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,6 +45,23 @@ vi.mock('@civitai/blocks-react', () => ({
 
 // Import App AFTER the mock is registered.
 import { App } from './App.js';
+
+/**
+ * The app's own stylesheet, as text, for the 0.3.2 guards near the bottom.
+ *
+ * Read off disk rather than imported, and via `process.cwd()` rather than
+ * `import.meta.url`, because both of the obvious routes are quietly wrong here:
+ * `.test.tsx` runs under the `dom` project, where `import.meta.url` is an
+ * `http:` URL that `fs` refuses; and `import css from './index.css?raw'`
+ * resolves to the EMPTY STRING, because vitest stubs CSS imports out by default
+ * (`test.css: false`) and the `?raw` suffix does not exempt it. An empty string
+ * is the dangerous one — every `.not.toContain()` below would have passed.
+ */
+function readIndexCss(): string {
+  const source = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8');
+  if (source.trim().length === 0) throw new Error('src/index.css read back empty');
+  return source;
+}
 
 let keySeq = 0;
 function makeItem(
@@ -382,6 +402,92 @@ describe('0.3.1 fixes, end to end on the board', () => {
     render(<App />);
     await screen.findByText('My own request');
     expect(screen.getByTestId('hero-action')).toContainElement(screen.getByTestId('signin-btn'));
+  });
+});
+
+// 🔴 READ THE LABEL ON EACH TEST BELOW. Neither of them is regression coverage
+// for the 0.3.2 defect, and it would be dishonest to count them as such.
+//
+// The defect was that Chromium painted TWO ✕ controls inside the search field:
+// its own ::-webkit-search-cancel-button and the app's clear button. jsdom does
+// not render, has no UA pseudo-elements and no layout, so nothing in this file
+// can observe it. Every 0.3.1 assertion passed straight through it.
+//
+// The instrument that CAN see it is `scripts/measure-search-clear.mjs`, which
+// drives a real Chromium against the dev harness and counts painted glyph
+// clusters: 2 before the fix, 1 after, with the field hovered.
+//
+// What these two DO buy: the first pins the declaration's presence, and the
+// second pins the SEAM — that the selector written in the stylesheet still
+// resolves to the rendered input. That seam is the half most likely to rot
+// silently, because renaming the app root or changing the input's type would
+// leave a perfectly valid CSS rule matching nothing at all.
+describe('0.3.2 — the UA search-clear reset', () => {
+  /**
+   * Pull the reset rule back out of the stylesheet.
+   *
+   * Comments are stripped FIRST and deliberately: the rule is documented at
+   * length in a comment directly above itself, so a text search over the raw
+   * file would be satisfied by the prose even if the declaration were deleted.
+   */
+  function uaSearchResetRule(): { selectors: string[]; declarations: string[] } {
+    const indexCssSource = readIndexCss();
+    const stripped = indexCssSource.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    // Positive control on the stripping step itself. This sentence exists only
+    // inside a comment in index.css; if it survives, the regex above silently
+    // did nothing and every assertion below is being made against prose.
+    expect(indexCssSource).toContain('belt-and-braces');
+    expect(stripped).not.toContain('belt-and-braces');
+
+    const rules = [...stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+    const rule = rules.find((m) => m[1].includes('::-webkit-search-cancel-button'));
+    if (!rule) throw new Error('index.css declares no ::-webkit-search-cancel-button rule');
+    return {
+      selectors: rule[1].split(',').map((s) => s.trim().replace(/\s+/g, ' ')).filter(Boolean),
+      declarations: rule[2]
+        .split(';')
+        .map((d) => d.replace(/\s+/g, '').toLowerCase())
+        .filter(Boolean),
+    };
+  }
+
+  it('SPELLED GUARD (not regression coverage): the stylesheet suppresses the UA control', () => {
+    const { selectors, declarations } = uaSearchResetRule();
+
+    expect(selectors).toContain(
+      "[data-app='app-requests'] input[type='search']::-webkit-search-cancel-button",
+    );
+    expect(selectors).toContain(
+      "[data-app='app-requests'] input[type='search']::-webkit-search-decoration",
+    );
+    // 🔴 This asserts the SOURCE, and the source is not what ships. `vite build`
+    // minifies the `-webkit-` declaration away for this project's target, so
+    // dist carries `appearance: none` alone — and that alone is what suppresses
+    // the control in Chromium 144 (measured against the built bundle, not just
+    // the dev server). The prefixed line survives here as cover for older
+    // WebKit/Blink. Treat a green here as "the rule is written", never as "the
+    // artifact behaves"; only the browser instrument can say the second thing.
+    expect(declarations).toContain('-webkit-appearance:none');
+    expect(declarations).toContain('appearance:none');
+  });
+
+  it('SEAM: the selector written in the stylesheet resolves to the rendered search input', async () => {
+    // Structural, not visual — it cannot tell you what got painted. It CAN tell
+    // you the rule is aimed at something, which a CSS-only guard cannot.
+    const { selectors } = uaSearchResetRule();
+    const elementPart = selectors[0].replace(/::-webkit-[a-z-]+$/, '');
+    expect(elementPart).not.toBe(selectors[0]); // the rule really is a pseudo-element rule
+
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'r1', title: 'A request', count: 3 })],
+      nextCursor: undefined,
+    });
+    render(<App />);
+    await screen.findByText('A request');
+
+    expect(document.querySelectorAll(elementPart)).toHaveLength(1);
+    expect(document.querySelector(elementPart)).toBe(screen.getByTestId('search-input'));
   });
 });
 

@@ -62,6 +62,31 @@ describe('SearchField', () => {
     expect(screen.getByTestId('search-summary')).toHaveTextContent('');
   });
 
+  it('stays type="search" — the reset in index.css needs it, and so do phones', () => {
+    // 0.3.2 suppressed Chromium's own ::-webkit-search-cancel-button because it
+    // painted a SECOND ✕ next to this component's clear button. The cheap way
+    // out would have been type="text", which hides the UA control by throwing
+    // away what the type is for: the search-shaped virtual keyboard with a
+    // "Search" action key, and the searchbox role the accessible-name test
+    // above matches on. Both are cheap to lose by accident and invisible in
+    // jsdom, so the type is pinned here rather than left to whoever edits next.
+    render(<Controlled initial="dark" />);
+    const input = screen.getByTestId('search-input');
+    expect(input).toHaveAttribute('type', 'search');
+    expect(input).toBe(screen.getByRole('searchbox'));
+  });
+
+  it('offers exactly ONE element with a clear-search accessible name', () => {
+    // The keyboard/AT half of the 0.3.2 fix. Chromium's UA cancel button is not
+    // exposed to assistive tech and is not in the tab order (verified against a
+    // real Chromium: one AX node named "Clear search", and Tab from the input
+    // lands on this button), so the visual doubling never had an a11y twin.
+    // This pins that only ONE named affordance exists here, so a future fix
+    // that reaches for a second visible control has to notice.
+    render(<Controlled initial="dark" />);
+    expect(screen.getAllByRole('button', { name: /clear search/i })).toHaveLength(1);
+  });
+
   it('marks its focus state so the app-owned ring is visible under the skin', async () => {
     const user = userEvent.setup();
     render(<Controlled />);
