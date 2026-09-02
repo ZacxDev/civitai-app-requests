@@ -131,6 +131,37 @@ Both themes and `prefers-reduced-motion` are asserted *behaviourally* against
 the mounted app — what the elements do, never that an attribute or a media query
 exists.
 
+### 🔴 The fourth layer: what jsdom structurally cannot see
+
+```bash
+npm run dev:harness &                 # or: vite preview, to measure the BUILT css
+npm run measure:search-clear          # --url http://localhost:5187 by default
+```
+
+jsdom does not render. It has no layout, no user-agent pseudo-elements and no
+pixels, so a whole class of defect passes through the suite untouched — 0.3.2
+was one: the browser painted **two** ✕ clear controls inside the search field
+(its own `::-webkit-search-cancel-button` next to this app's clear button) while
+every assertion above stayed green, because both elements were exactly where
+they were meant to be.
+
+`scripts/measure-search-clear.mjs` drives a real headless Chromium over CDP,
+puts the pointer on the field, screenshots the right-hand end of it at 4x,
+decodes the PNG and counts painted glyph clusters. It exits non-zero unless the
+count is 1 — and it measures two control states alongside, which at 0.3.1
+returned three different numbers (0 / 1 / 2), so the counter is demonstrably
+tracking the screen rather than sitting on a constant.
+
+Two things it taught, both easy to get wrong:
+
+- **Hover is load-bearing.** Blink keeps that button at `opacity: 0` until
+  `:hover` or `:focus`, so a scripted screenshot with the pointer parked
+  elsewhere shows one ✕ on completely broken code.
+- **Measure the BUILT stylesheet, not just the dev server.** `vite build`
+  minifies `-webkit-appearance` out of the fix for this project's target, so
+  dist ships only the unprefixed declaration. It still works — but the source
+  and the artifact are different files and only one of them is the product.
+
 ## Submit
 
 ```bash
