@@ -3,11 +3,220 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      🔴 DARK FIRST, and that order is the decision, not a formatting choice.
+      `color-scheme` resolves left-to-right against the viewer's preference, so
+      `light dark` would paint the UA canvas LIGHT for a viewer with NO
+      preference. This app's own `palette()` (src/brand.ts) already resolves an
+      unknown/absent theme to DARK — the host sends no BLOCK_INIT theme before
+      the bundle runs, so the boot theme is a guess and this is the same guess
+      the app makes. Keep the two in step.
+    -->
+    <meta name="color-scheme" content="dark light" />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231971c2'/></svg>" />
     <title>App Requests</title>
+    <!--
+      ─────────────────────────────────────────────────────────────────────────
+      BOOT SKELETON — paints before any script, and is what `bootSkeleton: true`
+      in block.manifest.json entitles the host to rely on.
+      ─────────────────────────────────────────────────────────────────────────
+
+      With `bootSkeleton: true` the full-page run host stands down its own
+      loading treatment: no opaque branded veil, the iframe is `opacity: 1` from
+      mount, and there is no reveal transition. The consequence is blunt — with
+      that key set over an EMPTY `#root`, the viewer sees a blank iframe for the
+      entire load, which is strictly worse than not opting in. So the markup in
+      `#root` below is load-bearing, not decoration; `src/bootSkeleton.ts`
+      implements the platform's blocking gate and `src/bootSkeleton.test.ts`
+      runs it against this file on every `npm test`.
+
+      Three properties this has to keep, all asserted:
+
+      1. INLINE. No external stylesheet, no JS. An external sheet is a second
+         round-trip that can land after the window this whole feature is about.
+      2. DARK IS THE BASE. Light lives ONLY inside
+         `@media (prefers-color-scheme: light)`. There is deliberately no
+         `@media (prefers-color-scheme: dark)` block — one would invert the
+         default for `no-preference` and for any UA without the query.
+      3. THE COLOURS ARE THE APP'S OWN. Every hex below is copied from
+         `src/brand.ts` (`LIGHT`/`DARK`) and `src/hero.ts`, and a test asserts
+         the equality so the two cannot drift into a colour flash at handoff.
+
+      Removal needs no code: `createRoot(container).render(...)` in
+      src/main.tsx clears the container's existing children before its first
+      commit. That is MEASURED in src/bootSkeleton.test.tsx against this very
+      markup, not assumed — it is a React behaviour and does not generalise to
+      other frameworks.
+    -->
+    <style>
+      /* The app sets these in src/index.css, which arrives with the bundle —
+         i.e. after this paint. Without them here the skeleton is inset by the
+         UA's default 8px body margin and then jumps when the bundle lands. */
+      html {
+        /* The strong guarantee: independent of `color-scheme` support entirely.
+           DARK.body from src/brand.ts. */
+        background: #14110c;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      :root {
+        color-scheme: dark light;
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+        /* DARK — the base, unconditioned values. From DARK in src/brand.ts. */
+        --ar-boot-body: #14110c;
+        --ar-boot-surface: #1c1813;
+        --ar-boot-surface-2: #262019;
+        --ar-boot-border: #40362b;
+      }
+
+      @media (prefers-color-scheme: light) {
+        html {
+          background: #fffbf4;
+        }
+
+        :root {
+          /* LIGHT in src/brand.ts. */
+          --ar-boot-body: #fffbf4;
+          --ar-boot-surface: #ffffff;
+          --ar-boot-surface-2: #fdf3e3;
+          --ar-boot-border: #e2d5bd;
+        }
+      }
+
+      /* ---- geometry ----
+
+         Every value here is copied from the styles the first React commit
+         paints, so the handoff is not a visible jump:
+
+           page root  -> `pageStyle`     (src/theme.ts)
+           well       -> `contentStyle`  (src/theme.ts): max-width 760,
+                         padding clamp(14px, 3vw, 24px), margin 0 auto
+           stack gap  -> `<Stack gap={18}>` in src/App.tsx
+           hero       -> `<Hero>`: overlay min-height 116 + 1px border each side
+                         = 118, radius `radius.lg` (14px), band ink
+                         HERO_BAND_INK — fixed dark in BOTH themes, so the
+                         skeleton hero is too
+           toolbar    -> the first commit's toolbar holds only <SortToggle>
+                         (SearchField and the count Badge are gated on
+                         `visible.length > 0`, which is 0 while loading): a
+                         `size="sm"` SegmentedControl, 24px segments + 3px
+                         padding each side = 30px, right-aligned
+           list gap   -> `<Stack gap={10}>` around the rows */
+
+      [data-boot-skeleton] {
+        box-sizing: border-box;
+        width: 100%;
+        min-height: 100dvh;
+        background: var(--ar-boot-body);
+      }
+
+      [data-boot-skeleton] [data-boot-well] {
+        box-sizing: border-box;
+        margin: 0 auto;
+        width: 100%;
+        max-width: 760px;
+        padding: clamp(14px, 3vw, 24px);
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      [data-boot-skeleton] [data-boot-hero] {
+        box-sizing: border-box;
+        height: 118px;
+        border-radius: 14px;
+        /* HERO_BAND_INK from src/hero.ts — the band is fixed dark in both
+           themes because its text is fixed light. No light override. */
+        background: #1c160e;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      [data-boot-skeleton] [data-boot-toolbar] {
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      [data-boot-skeleton] [data-boot-sort] {
+        box-sizing: border-box;
+        display: block;
+        width: 132px;
+        height: 30px;
+        border-radius: 10px;
+        background: var(--ar-boot-surface-2);
+        border: 1px solid var(--ar-boot-border);
+      }
+
+      [data-boot-skeleton] [data-boot-list] {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      [data-boot-skeleton] [data-boot-row] {
+        box-sizing: border-box;
+        height: 78px;
+        border-radius: 10px;
+        background: var(--ar-boot-surface);
+        border: 1px solid var(--ar-boot-border);
+      }
+
+      /* A slow, low-amplitude breath so the boot state reads as "loading"
+         rather than "this is the content". Honours the same reduced-motion
+         contract the app's own motion helper enforces in JS. */
+      @keyframes ar-boot-pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.62;
+        }
+      }
+
+      [data-boot-skeleton] [data-boot-hero],
+      [data-boot-skeleton] [data-boot-sort],
+      [data-boot-skeleton] [data-boot-row] {
+        animation: ar-boot-pulse 1.6s ease-in-out infinite;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        [data-boot-skeleton] [data-boot-hero],
+        [data-boot-skeleton] [data-boot-sort],
+        [data-boot-skeleton] [data-boot-row] {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!--
+        `data-boot-skeleton` is an ATTRIBUTE, not a class: classes are mangled
+        by CSS-modules / purge, an attribute survives the bundler and is
+        deterministically greppable out of the built HTML. `aria-hidden` because
+        the host already publishes `aria-busy` on the iframe element while this
+        is on screen — an in-frame live region would announce a second time.
+
+        It MUST stay a descendant of #root: a skeleton painted as a sibling is
+        never replaced by React's render and stays on screen after mount.
+      -->
+      <div data-boot-skeleton aria-hidden="true">
+        <div data-boot-well>
+          <div data-boot-hero></div>
+          <div data-boot-toolbar><span data-boot-sort></span></div>
+          <div data-boot-list>
+            <div data-boot-row></div>
+            <div data-boot-row></div>
+            <div data-boot-row></div>
+            <div data-boot-row></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
