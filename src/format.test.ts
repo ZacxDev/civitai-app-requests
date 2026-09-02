@@ -29,15 +29,40 @@ function item(partial: Partial<SharedListItem> & { key: string }): SharedListIte
 }
 
 describe('authorLabel', () => {
-  it('shows "you" for the viewer', () => {
-    expect(authorLabel(42, 42)).toBe('you');
+  // 🔴 REGRESSION (0.3.0 → 0.3.1). 0.3.0 returned `you` when the author was the
+  // viewer, so every card on your own board said "you" while everyone else's
+  // said "A Civitai member". This assertion is RED on 0.3.0.
+  //
+  // The previous version of this block asserted `authorLabel(42, 42) === 'you'`.
+  // That was not weakened to make anything pass — it is repointed, because it
+  // pinned the defect itself: it asserted the viewer/other SPLIT, which is the
+  // thing being removed. What survives is the part that was always a contract —
+  // the label never leaks the raw numeric id.
+  it('is the SAME label on the viewer\'s own row as on anyone else\'s', () => {
+    expect(authorLabel(42, 42)).toBe('A Civitai member');
+    expect(authorLabel(42, 42)).toBe(authorLabel(42, 7));
   });
-  it('shows a neutral "A Civitai member" for others (never a raw numeric id)', () => {
-    expect(authorLabel(42, 7)).toBe('A Civitai member');
-    // The un-resolvable label must not leak the internal numeric handle.
-    expect(authorLabel(42, 7)).not.toMatch(/#?\d/);
+
+  it('never says "you" for any viewer/author combination', () => {
+    // Enumerated rather than sampled: both ids over the same small domain, plus
+    // the two anonymous viewer shapes. A branch on the viewer anywhere in the
+    // function is caught by one of these.
+    const ids = [0, 1, 7, 42, -3];
+    const viewers: (number | null | undefined)[] = [...ids, null, undefined];
+    for (const author of ids) {
+      for (const viewer of viewers) {
+        const label = authorLabel(author, viewer);
+        expect(label).toBe('A Civitai member');
+        expect(label).not.toMatch(/\byou\b/i);
+      }
+    }
   });
-  it('shows "A Civitai member" when the viewer is anonymous', () => {
+
+  it('never leaks the internal numeric handle', () => {
+    expect(authorLabel(4021, 7)).not.toMatch(/#?\d/);
+  });
+
+  it('shows the same label when the viewer is anonymous', () => {
     expect(authorLabel(42, null)).toBe('A Civitai member');
     expect(authorLabel(42, undefined)).toBe('A Civitai member');
   });
@@ -48,6 +73,29 @@ describe('isOwnEntry', () => {
     expect(isOwnEntry(5, 5)).toBe(true);
     expect(isOwnEntry(5, 6)).toBe(false);
     expect(isOwnEntry(5, null)).toBe(false);
+  });
+
+  // 🔴 The two must stay INDEPENDENT. Making the label uniform is a copy change;
+  // it must not have quietly taken own-post recognition with it, and a later
+  // "simplification" that derives one from the other must fail here rather than
+  // in production. This is a SEAM guard, not a component guard: it pins the
+  // relationship (label constant, gate varies) over the same inputs.
+  it('still distinguishes own rows even though the label no longer does', () => {
+    const cases: Array<[number, number | null | undefined, boolean]> = [
+      [5, 5, true],
+      [5, 6, false],
+      [5, null, false],
+      [5, undefined, false],
+      [0, 0, true],
+    ];
+    for (const [author, viewer, own] of cases) {
+      expect(isOwnEntry(author, viewer)).toBe(own);
+      // ...while the label is flat across every one of those same inputs.
+      expect(authorLabel(author, viewer)).toBe('A Civitai member');
+    }
+    // The gate really does vary over this set — otherwise the line above would
+    // be pinning a constant against another constant and prove nothing.
+    expect(new Set(cases.map(([a, v]) => isOwnEntry(a, v))).size).toBe(2);
   });
 });
 
