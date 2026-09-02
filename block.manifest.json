@@ -27,6 +27,7 @@
     "resizable": true,
     "sandbox": "allow-scripts allow-forms"
   },
+  "bootSkeleton": true,
   "category": "utility",
   "repository": "https://github.com/ZacxDev/civitai-app-requests",
   "contentRating": "g",

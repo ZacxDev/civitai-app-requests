@@ -1,5 +1,12 @@
 :root {
-  color-scheme: light dark;
+  /* 🔴 DARK FIRST, and it has to stay in step with the same declaration in the
+     boot skeleton's inline <style> (index.html) and with `palette()` in
+     brand.ts, which resolves an unknown/absent theme to DARK. `color-scheme`
+     resolves left-to-right against the viewer's preference, so `light dark`
+     here would flip the UA canvas back to LIGHT for a no-preference viewer the
+     moment this stylesheet lands — i.e. a dark boot skeleton handing over to a
+     light canvas, which is the exact flash the skeleton exists to remove. */
+  color-scheme: dark light;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
