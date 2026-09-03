@@ -358,6 +358,175 @@ describe('a live resize', () => {
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
+ * 🔴 A FLEX BASIS IS AXIS-RELATIVE, AND FLIPPING A CONTAINER RE-AIMS IT.
+ *
+ * THE DEFECT THIS GUARD EXISTS FOR, measured in a real Chromium at 375px before
+ * the fix:
+ *
+ *     board-ready   h=264  dir=column
+ *       child0 (search wrapper)  h=220   content=53   grow=1  basis=220px
+ *       child1 (sort row)        h=32    content=32   grow=0  basis=auto
+ *
+ * ~167px of dead space. `flex: 1 1 220px` was written for a ROW, where `220px`
+ * is a minimum WIDTH. The stacked toolbar sets `flex-direction: column`, so the
+ * same declaration became a 220px HEIGHT with `flex-grow: 1` pinning it there.
+ *
+ * 🔴 EVERY ATTRIBUTE ASSERTION IN THIS FILE PASSED THROUGH IT. `data-layout`
+ * read `stacked`, `data-tier` read `base`, the testids were all present — the
+ * layout DECISION was correct and only the SIZING was wrong. jsdom has no
+ * layout engine, so no amount of rendering here could have caught it as
+ * geometry. What jsdom CAN see is the resolved style, and the relationship
+ * between a container's axis and its children's basis is decidable from that
+ * alone.
+ *
+ * So this pins the RELATIONSHIP — "no column flex container has a child with a
+ * fixed-length flex-basis" — not the literal `'0 0 auto'` a reword would walk
+ * past. It reads the resolved `flexBasis` LONGHAND, so `flex: '1 1 220px'`,
+ * `flexBasis: '220px'` and `flex: '0 1 220px'` are all the same finding, and it
+ * scans the WHOLE rendered tree rather than the one container the bug was found
+ * in — a sibling that flips later is covered without anyone remembering to add
+ * it here.
+ *
+ * The real-pixel counterpart is `scripts/measure-toolbar-geometry.mjs`, the
+ * fourth layer (see README). This one is what runs in CI.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+describe('🔴 no column flex container has a row-shaped child', () => {
+  /**
+   * A length that would become a HEIGHT on the main axis of a column.
+   *
+   * `auto` and `content` are content-sized and fine. A bare `0` / `0%` is a
+   * degenerate basis that collapses rather than reserving space, so it is not
+   * this defect either — only a POSITIVE length reserves the box.
+   */
+  function isFixedLengthBasis(basis: string): boolean {
+    const v = basis.trim().toLowerCase();
+    if (v === '' || v === 'auto' || v === 'content' || v === 'inherit' || v === 'initial') return false;
+    const n = Number.parseFloat(v);
+    return Number.isFinite(n) && n > 0;
+  }
+
+  /**
+   * Every column flex container in the tree.
+   *
+   * Two sources, because the app flips axes two different ways: an inline
+   * `flexDirection: 'column'` (how every branch in this change does it), and the
+   * pack's `<Stack>`, which is a column by definition in the pack's own
+   * stylesheet — jsdom cannot parse that stylesheet, so the element is matched
+   * by its `data-civitai-ui` marker instead. The claim that a Stack really is a
+   * column is not taken on trust; it is asserted below against the pack's CSS.
+   */
+  function columnContainers(root: HTMLElement): HTMLElement[] {
+    return [...root.querySelectorAll<HTMLElement>('*')].filter(
+      (el) =>
+        el.style.flexDirection === 'column' ||
+        getComputedStyle(el).flexDirection === 'column' ||
+        el.getAttribute('data-civitai-ui') === 'stack',
+    );
+  }
+
+  function offenders(root: HTMLElement) {
+    const found: string[] = [];
+    for (const container of columnContainers(root)) {
+      for (const child of [...container.children] as HTMLElement[]) {
+        const basis = getComputedStyle(child).flexBasis || child.style.flexBasis || '';
+        if (isFixedLengthBasis(basis)) {
+          const name =
+            container.getAttribute('data-testid') ??
+            container.getAttribute('data-civitai-ui') ??
+            container.tagName.toLowerCase();
+          const kid =
+            child.getAttribute('data-testid') ?? child.getAttribute('data-civitai-ui') ?? child.tagName.toLowerCase();
+          found.push(`${name} > ${kid} has flex-basis: ${basis} on the COLUMN main axis (a height)`);
+        }
+      }
+    }
+    return found;
+  }
+
+  it('the pack’s <Stack> really is a column — the assumption is checked, not trusted', async () => {
+    const { BLOCKS_UI_STYLES } = await import('@civitai/blocks-react/ui');
+    const rule = /\[data-civitai-ui=['"]stack['"]\]\s*\{[^}]*\}/.exec(BLOCKS_UI_STYLES)?.[0] ?? '';
+    expect(rule, 'no [data-civitai-ui=stack] rule found in the pack stylesheet').not.toBe('');
+    expect(rule.replace(/\s+/g, ' ')).toMatch(/flex-direction:\s*column/);
+  });
+
+  it('finds column containers at all — positive control', async () => {
+    seedBoard();
+    await renderAt(PHONE);
+    const root = screen.getByTestId('app-root');
+    // A walker wired to nothing would report zero offenders for every tree it
+    // was ever shown, which is indistinguishable from a clean tree.
+    expect(
+      columnContainers(root).length,
+      'the walker must actually find column containers, or every "clean" verdict below is vacuous',
+    ).toBeGreaterThan(2);
+  });
+
+  it('the walker CAN report an offender — negative control', async () => {
+    seedBoard();
+    await renderAt(PHONE);
+    const root = screen.getByTestId('app-root');
+    const toolbar = screen.getByTestId('board-ready');
+    const planted = toolbar.firstElementChild as HTMLElement;
+    const before = planted.style.flexBasis;
+    // Plant the EXACT defect, on the EXACT element it occurred on.
+    planted.style.flexBasis = '220px';
+    expect(
+      offenders(root).some((o) => o.includes('board-ready') && o.includes('220px')),
+      'the walker must report a planted 220px basis under the stacked toolbar',
+    ).toBe(true);
+    planted.style.flexBasis = before;
+    expect(offenders(root), 'and go clean again once it is removed').toEqual([]);
+  });
+
+  it('is clean at every stacked width, with a board and empty', async () => {
+    for (const width of [320, PHONE, 470, TABLET, 700]) {
+      for (const empty of [false, true]) {
+        if (empty) h.shared.list.mockResolvedValue({ items: [], nextCursor: undefined });
+        else seedBoard();
+        await renderAt(width);
+        expect(
+          offenders(screen.getByTestId('app-root')),
+          `a column container at ${width}px (${empty ? 'empty' : 'with a board'}) has a child sized for the ROW axis`,
+        ).toEqual([]);
+        cleanup();
+      }
+    }
+  });
+
+  it('is clean at the wide widths too — the row-axis basis is legal THERE', async () => {
+    // 🔴 The point of scanning by CONTAINER AXIS rather than by string: the
+    // request row's `flex: 1 1 260px` and the search field's `1 1 220px` are
+    // CORRECT in a row, and a guard that merely grepped for a length basis would
+    // have to false-positive on them or be switched off here. It does neither.
+    for (const width of [DESKTOP, WIDE]) {
+      seedBoard();
+      await renderAt(width);
+      expect(offenders(screen.getByTestId('app-root')), `clean at ${width}px`).toEqual([]);
+      cleanup();
+    }
+  });
+
+  it('the search wrapper is content-sized when stacked and row-sized when not', async () => {
+    // The specific consequence, named, so a reader sees what changed and why.
+    seedBoard();
+    await renderAt(PHONE);
+    const stacked = screen.getByTestId('search-input').closest('[data-testid="board-ready"] > *') as HTMLElement;
+    expect(getComputedStyle(stacked).flexBasis, 'stacked: no height basis').toBe('auto');
+    expect(getComputedStyle(stacked).flexGrow, 'stacked: nothing to stretch it vertically').toBe('0');
+    cleanup();
+
+    seedBoard();
+    await renderAt(DESKTOP);
+    const row = screen.getByTestId('search-input').closest('[data-testid="board-ready"] > *') as HTMLElement;
+    expect(getComputedStyle(row).flexBasis, 'row: the 220px WIDTH floor is kept').toBe('220px');
+    expect(getComputedStyle(row).flexGrow, 'row: and it still grows to fill').toBe('1');
+  });
+});
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
  * 🔴 THE CAPTURE RECIPE'S SELECTORS, AT EVERY TIER.
  *
  * <datapacket-talos>/.claude/skills/app-capture/scripts/recipes/app-requests.json

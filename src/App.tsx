@@ -608,7 +608,16 @@ function Board() {
             style={layout.toolbar === 'stacked' ? { flexDirection: 'column' } : undefined}
           >
             {visible.length > 0 && (
-              <SearchField value={query} onChange={setQuery} resultSummary={resultSummary} />
+              // 🔴 `toolbar` is not decoration — the field's flex basis is
+              // axis-relative and this container's axis is what `layout.toolbar`
+              // decides. The two must move together or the basis becomes a
+              // height. See SearchField's `toolbar` prop.
+              <SearchField
+                value={query}
+                onChange={setQuery}
+                resultSummary={resultSummary}
+                toolbar={layout.toolbar}
+              />
             )}
             <Group
               gap={10}

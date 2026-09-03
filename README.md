@@ -162,6 +162,7 @@ exists.
 ```bash
 npm run dev:harness &                 # or: vite preview, to measure the BUILT css
 npm run measure:search-clear          # --url http://localhost:5187 by default
+npm run measure:toolbar               # stacked-toolbar geometry at 4 widths
 ```
 
 jsdom does not render. It has no layout, no user-agent pseudo-elements and no
@@ -187,6 +188,35 @@ Two things it taught, both easy to get wrong:
   minifies `-webkit-appearance` out of the fix for this project's target, so
   dist ships only the unprefixed declaration. It still works — but the source
   and the artifact are different files and only one of them is the product.
+
+`scripts/measure-toolbar-geometry.mjs` is the second instrument in this layer,
+and it exists because the width-adaptive work walked straight into the same
+trap. 🔴 **A flex basis is axis-relative, so flipping a container re-aims it.**
+The search wrapper carried `flex: 1 1 220px`, written for a row where `220px`
+is a minimum *width*; the stacked toolbar sets `flex-direction: column`, and the
+identical declaration became a 220px **height** with `flex-grow: 1` holding it
+there. Measured at 375px: the wrapper laid out at **220px around 53px of
+content — ~167px of dead space**, while every assertion in the suite stayed
+green, because `data-layout` really did read `stacked` and every testid really
+was present. The layout *decision* was right; only the *sizing* was wrong, and
+sizing is precisely what jsdom does not have.
+
+It measures two things that fail differently — each toolbar child's box height
+against the union of its own children's boxes (the **effect**, in pixels), and
+each child's resolved `flex-basis` while the container is a column (the
+**mechanism**) — at 375 / 519 / 900 / 1440, and it carries the same
+control-must-move property as the script above: the toolbar's direction and the
+wrapper's basis have to *differ* between the narrow and wide widths, or an
+emulation that never applied would measure one width four times and report a
+confident PASS.
+
+The cause is also pinned in CI, where no browser is available: `src/responsive.test.tsx`
+walks the rendered tree and asserts that **no column flex container has a child
+with a fixed-length `flex-basis`** — the relationship, read off the resolved
+longhand, so `flex: 1 1 220px`, `flexBasis: '220px'` and `flex: 0 1 220px` are
+one finding and a reword cannot walk past it. Scanning by container *axis* is
+what lets the request row keep its perfectly correct `flex: 1 1 260px` in a row
+without a false positive.
 
 ## Submit
 

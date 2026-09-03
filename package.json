@@ -14,6 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "measure:search-clear": "node scripts/measure-search-clear.mjs",
+    "measure:toolbar": "node scripts/measure-toolbar-geometry.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
