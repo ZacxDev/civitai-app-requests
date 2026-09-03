@@ -64,6 +64,21 @@ export interface HeroProps {
   tagline: string;
   /** Optional right-aligned slot for the secondary create action. */
   action?: React.ReactNode;
+  /**
+   * How the action sits in the band.
+   *
+   * `'inline'` — beside the title, right-aligned. The 0.3.x arrangement, and
+   * what a band wider than ~768px should keep.
+   *
+   * `'block'` — on its own line below the title, stretched to the band's width.
+   * Below `sm` the title, the tagline and a "Request an app" button cannot share
+   * a line without the title wrapping to three, and `flex-wrap` alone drops the
+   * button to a line where it then floats at its natural ~140px against a
+   * full-width plate. Stretching it is what makes the wrap look chosen.
+   *
+   * Defaults to `'inline'` — the unmeasured frame must render what 0.3.3 shipped.
+   */
+  actionLayout?: 'inline' | 'block';
   /** Override the artwork URL (tests, and a future per-locale hero). */
   imageUrl?: string;
 }
@@ -76,12 +91,19 @@ function rgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-export function Hero({ title, tagline, action, imageUrl = HERO_IMAGE_URL }: HeroProps): React.JSX.Element {
+export function Hero({
+  title,
+  tagline,
+  action,
+  actionLayout = 'inline',
+  imageUrl = HERO_IMAGE_URL,
+}: HeroProps): React.JSX.Element {
   const [imageOk, setImageOk] = useState(true);
   const reduced = useReducedMotion();
+  const block = actionLayout === 'block';
 
   return (
-    <header data-testid="hero" style={bandStyle}>
+    <header data-testid="hero" data-layout={actionLayout} style={bandStyle}>
       {imageOk && (
         <img
           src={imageUrl}
@@ -102,7 +124,13 @@ export function Hero({ title, tagline, action, imageUrl = HERO_IMAGE_URL }: Hero
         exists only so the component test can assert the floor is really painted.
       */}
       <div data-testid="hero-scrim" aria-hidden style={scrimStyle} />
-      <div style={overlayStyle}>
+      <div
+        style={
+          block
+            ? { ...overlayStyle, flexDirection: 'column', alignItems: 'stretch' }
+            : overlayStyle
+        }
+      >
         <div style={rowStyle}>
           <BrandMark size={44} />
           <div style={{ minWidth: 0 }}>
@@ -115,7 +143,14 @@ export function Hero({ title, tagline, action, imageUrl = HERO_IMAGE_URL }: Hero
           </div>
         </div>
         {action && (
-          <div style={actionPlateStyle} data-testid="hero-action">
+          <div
+            style={
+              block
+                ? { ...actionPlateStyle, display: 'flex', flexShrink: 1, width: '100%' }
+                : actionPlateStyle
+            }
+            data-testid="hero-action"
+          >
             {action}
           </div>
         )}
@@ -219,9 +254,22 @@ const actionPlateStyle: CSSProperties = {
   boxShadow: `0 6px 18px ${rgba('#000000', 0.45)}`,
 };
 
+// 🔴 THE TYPE SCALE IS `clamp()`, NOT A MEDIA QUERY, AND THAT IS DELIBERATE.
+//
+// Every surface in this app is styled with a React inline `style`, and an inline
+// style beats any stylesheet rule that is not `!important`. So a
+// `@media (max-width: 479px) { … font-size: 17px }` in src/index.css would parse
+// fine, ship, and do NOTHING — an inert declaration that reads as coverage while
+// providing none. `clamp()` sits IN the inline style, so it cannot be shadowed,
+// it needs no JS and no re-render, and inside a block's iframe `vw` already
+// measures the slot rather than the browser window.
+//
+// Upper bounds are the 0.3.3 values exactly, so nothing changes at or above the
+// width where they were chosen; the lower bounds are where the title stops
+// wrapping to three lines in a 360px slot.
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 21,
+  fontSize: 'clamp(17px, 4.5vw, 21px)',
   fontWeight: 700,
   lineHeight: 1.15,
   letterSpacing: '-0.015em',
@@ -230,7 +278,7 @@ const titleStyle: CSSProperties = {
 
 const taglineStyle: CSSProperties = {
   margin: '4px 0 0',
-  fontSize: 13,
+  fontSize: 'clamp(12px, 2.8vw, 13px)',
   lineHeight: 1.4,
   color: HERO_TAGLINE_COLOR,
 };

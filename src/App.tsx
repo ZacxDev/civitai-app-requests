@@ -10,6 +10,7 @@ import {
 
 import {
   useBlockAnalytics,
+  useBlockBreakpoint,
   useBlockContext,
   useBlockResize,
   useRequestSignIn,
@@ -56,6 +57,7 @@ import {
   TITLE_MAX,
   type SortMode,
 } from './format.js';
+import { boardLayout, type BoardLayout } from './layout.js';
 import { entryMotionProps, useReducedMotion } from './motion.js';
 import {
   buildSuppressionEntry,
@@ -128,6 +130,17 @@ function Board() {
   // sees each expansion — see OverflowMenu's header note.
   const rootRef = useRef<HTMLDivElement>(null);
   useBlockResize(rootRef);
+
+  /**
+   * The block's own WIDTH tier — a container query over `rootRef`, not a media
+   * query over the viewport. `useBlockResize` above reports our HEIGHT to the
+   * host; this reads back the width the host gave us. They are different
+   * directions of the same conversation and both key on the same element.
+   *
+   * Everything that branches on width reads `layout`; see src/layout.ts for the
+   * thresholds and for why each branch is gated on `measured`.
+   */
+  const layout = boardLayout(useBlockBreakpoint(rootRef));
 
   const viewerId = viewer?.id ?? null;
   const isAnon = ready && viewer == null;
@@ -532,6 +545,11 @@ function Board() {
       data-app="app-requests"
       data-theme={paintTheme}
       data-testid="app-root"
+      // Machine-readable evidence of what the block resolved its own width to.
+      // Not decoration: a capture or a bug report taken at the wrong tier is the
+      // hardest kind to read, and this puts the answer in the DOM.
+      data-tier={layout.tier}
+      data-measured={layout.measured ? 'true' : 'false'}
       style={rootStyle}
     >
       <div style={contentStyle}>
@@ -539,6 +557,7 @@ function Board() {
           <Hero
             title="App Requests"
             tagline="Ask. Vote. Watch it get built."
+            actionLayout={layout.heroAction}
             action={
               isAnon ? (
                 <Button color="primary" onClick={() => requestSignIn()} data-testid="signin-btn">
@@ -551,6 +570,10 @@ function Board() {
                 <Button
                   variant="light"
                   color="primary"
+                  // Below `sm` the CTA owns its own line, so a stretched target
+                  // is the honest shape — a 120px button floating in a
+                  // full-width plate reads as unfinished.
+                  fullWidth={layout.heroAction === 'block'}
                   onClick={() => {
                     setComposerOpen(true);
                     track('composer_opened', {});
@@ -567,19 +590,49 @@ function Board() {
           {/*
             The toolbar is the capture recipe's READY ANCHOR (`board-ready`). It
             is mounted at every data condition — zero requests, many requests,
-            signed in, signed out — which is exactly what an anchor has to be.
+            signed in, signed out — and now, additionally, AT EVERY WIDTH TIER.
+            🔴 That last clause is a hard constraint, not a nicety: the store
+            capture gates the whole run on this testid being present at rest, so
+            a tier that dropped it would time out at 45s reporting that the app
+            never booted. Both layouts below render the SAME element with the
+            same testid; only its flex direction changes.
+            See <datapacket-talos>/.claude/skills/app-capture/scripts/recipes/app-requests.json.
           */}
-          <Group justify="space-between" align="flex-start" gap={12} wrap data-testid="board-ready">
+          <Group
+            justify="space-between"
+            align={layout.toolbar === 'stacked' ? 'stretch' : 'flex-start'}
+            gap={12}
+            wrap
+            data-testid="board-ready"
+            data-layout={layout.toolbar}
+            style={layout.toolbar === 'stacked' ? { flexDirection: 'column' } : undefined}
+          >
             {visible.length > 0 && (
               <SearchField value={query} onChange={setQuery} resultSummary={resultSummary} />
             )}
-            <Group gap={10} align="center">
+            <Group
+              gap={10}
+              align="center"
+              wrap={false}
+              style={layout.toolbar === 'stacked' ? { width: '100%' } : undefined}
+            >
               {visible.length > 0 && (
                 <Badge variant="light" color="primary" size="lg" data-testid="request-count">
                   {visible.length.toLocaleString()}
                 </Badge>
               )}
-              <SortToggle sort={sort} onChange={handleSortChange} />
+              {/*
+                Stacked, the switcher takes the rest of its row — two fat,
+                equal-width targets instead of two squeezed ones. `minWidth: 0`
+                is what lets it actually shrink inside the flex row.
+              */}
+              <div style={layout.sortFullWidth ? { flex: '1 1 auto', minWidth: 0 } : undefined}>
+                <SortToggle
+                  sort={sort}
+                  onChange={handleSortChange}
+                  fullWidth={layout.sortFullWidth}
+                />
+              </div>
             </Group>
           </Group>
 
@@ -670,6 +723,7 @@ function Board() {
                 <RequestRow
                   key={item.key}
                   item={item}
+                  layout={layout.row}
                   viewerId={viewerId}
                   isAnon={isAnon}
                   owner={owner}
@@ -837,9 +891,23 @@ function SubmitForm({
   );
 }
 
-/** One request row: vote pill + title/body + meta + an overflow menu of actions. */
+/**
+ * One request row: vote pill + title/body + meta + an overflow menu of actions.
+ *
+ * TWO ARRANGEMENTS OF THE SAME PARTS, and that is the whole of it — every
+ * element, every testid and every handler is identical in both:
+ *
+ *   `regular` (≥ 480px)  [ ▲12 ]  Title / body / meta          [ ⋯ ]
+ *   `compact` (< 480px)  Title / body                          [ ⋯ ]
+ *                        [ ▲12 ]  meta
+ *
+ * The left rail costs the title ~90px, which a 360px slot does not have to
+ * spare. Moving the pill down rather than shrinking it keeps the vote target at
+ * full size, which is the control that matters most on a phone.
+ */
 function RequestRow({
   item,
+  layout,
   viewerId,
   isAnon,
   owner,
@@ -853,6 +921,7 @@ function RequestRow({
   onEdit,
 }: {
   item: SharedListItem;
+  layout: BoardLayout['row'];
   viewerId: number | null;
   isAnon: boolean;
   owner: boolean;
@@ -913,56 +982,98 @@ function RequestRow({
     });
   }
 
+  // ---- the parts, composed once and arranged twice ----
+
+  const vote = <VoteButton count={item.count} voted={voted} busy={busy} onClick={onVote} />;
+
+  const meta = (
+    <Group gap={8} align="center" wrap>
+      <span style={metaText}>{authorLabel(item.authorUserId, viewerId)}</span>
+      <span style={metaDotStyle} aria-hidden>
+        ·
+      </span>
+      <span style={metaText}>{relativeTime(item.createdAt)}</span>
+    </Group>
+  );
+
+  const editForm = (
+    <EditForm
+      item={item}
+      onCancel={() => setEditing(false)}
+      onSave={async (next) => {
+        const ok = await onEdit(next);
+        if (ok) setEditing(false);
+        return ok;
+      }}
+    />
+  );
+
+  const titleBlock = (
+    <>
+      <span style={requestTitleStyle}>{item.value.title}</span>
+      {item.value.body && <p style={requestBodyStyle}>{item.value.body}</p>}
+    </>
+  );
+
+  // Signed-out viewers get NO menu: every item in it is a mutation the platform
+  // will reject for them, and offering an affordance that can only produce an
+  // error is worse than offering nothing.
+  const menu =
+    !isAnon && !editing && menuItems.length > 0 ? (
+      <OverflowMenu
+        label={`More actions for “${item.value.title}”`}
+        items={menuItems}
+        data-testid="row-menu"
+      />
+    ) : null;
+
+  const compact = layout === 'compact';
+
   return (
     <Card
       padding="md"
       style={{ ...cardStyle, animation: entry.animation }}
       data-motion={entry['data-motion']}
       data-testid="request-row"
+      data-layout={layout}
       data-key={item.key}
     >
-      <Group gap={14} align="flex-start" wrap={false}>
-        <VoteButton count={item.count} voted={voted} busy={busy} onClick={onVote} />
-
-        <Stack gap={6} style={{ flex: '1 1 260px', minWidth: 0 }}>
-          {editing ? (
-            <EditForm
-              item={item}
-              onCancel={() => setEditing(false)}
-              onSave={async (next) => {
-                const ok = await onEdit(next);
-                if (ok) setEditing(false);
-                return ok;
-              }}
-            />
-          ) : (
-            <>
-              <span style={requestTitleStyle}>{item.value.title}</span>
-              {item.value.body && <p style={requestBodyStyle}>{item.value.body}</p>}
-              <Group gap={8} align="center" wrap>
-                <span style={metaText}>{authorLabel(item.authorUserId, viewerId)}</span>
-                <span style={metaDotStyle} aria-hidden>
-                  ·
-                </span>
-                <span style={metaText}>{relativeTime(item.createdAt)}</span>
-              </Group>
-            </>
-          )}
+      {compact ? (
+        <Stack gap={10}>
+          <Group gap={10} align="flex-start" wrap={false}>
+            <Stack gap={6} style={{ flex: '1 1 auto', minWidth: 0 }}>
+              {editing ? editForm : titleBlock}
+            </Stack>
+            {menu}
+          </Group>
+          {/*
+            The pill stays mounted while editing, exactly as the left rail does
+            in the regular arrangement — the two layouts must differ in
+            ARRANGEMENT only, never in which controls exist.
+          */}
+          <Group gap={10} align="center" wrap>
+            {vote}
+            {!editing && meta}
+          </Group>
         </Stack>
+      ) : (
+        <Group gap={14} align="flex-start" wrap={false}>
+          {vote}
 
-        {/*
-          Signed-out viewers get NO menu: every item in it is a mutation the
-          platform will reject for them, and offering an affordance that can only
-          produce an error is worse than offering nothing.
-        */}
-        {!isAnon && !editing && menuItems.length > 0 && (
-          <OverflowMenu
-            label={`More actions for “${item.value.title}”`}
-            items={menuItems}
-            data-testid="row-menu"
-          />
-        )}
-      </Group>
+          <Stack gap={6} style={{ flex: '1 1 260px', minWidth: 0 }}>
+            {editing ? (
+              editForm
+            ) : (
+              <>
+                {titleBlock}
+                {meta}
+              </>
+            )}
+          </Stack>
+
+          {menu}
+        </Group>
+      )}
 
       <Modal
         opened={confirmingWithdraw}
@@ -1118,13 +1229,27 @@ function EditForm({
   );
 }
 
-function SortToggle({ sort, onChange }: { sort: SortMode; onChange: (s: SortMode) => void }) {
+function SortToggle({
+  sort,
+  onChange,
+  fullWidth = false,
+}: {
+  sort: SortMode;
+  onChange: (s: SortMode) => void;
+  fullWidth?: boolean;
+}) {
   // SegmentedControl gives role="tablist" + role="tab" + aria-selected + roving
   // ArrowLeft/Right for free.
+  //
+  // 🔴 `data` stays a two-item array at EVERY tier. The capture recipe drives
+  // this control by ordinal — `[data-testid=sort-control] button:nth-of-type(1)`
+  // and `(2)` — so collapsing it to a menu, or hiding a segment on a narrow
+  // slot, would break both of the store's board states.
   return (
     <SegmentedControl
       aria-label="Sort requests"
       size="sm"
+      fullWidth={fullWidth}
       value={sort}
       onChange={(v) => onChange(v as SortMode)}
       data-testid="sort-control"

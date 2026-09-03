@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "app-requests",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "name": "App Requests",
   "tagline": "Ask. Vote. Watch it get built.",
   "description": "App Requests is the community board for the apps and features you want on Civitai. Post an idea, up-vote the ones you want most, and watch what people care about rise to the top.\n\nThe board opens ranked by votes, so the most-wanted ideas are the first thing you see. Search filters the requests that have been loaded, and the board tells you when it is looking at only part of a large board rather than pretending otherwise.\n\nA request is a title plus optional details. As you write one, the board surfaces requests that already look similar — up-voting one of those lifts it faster than splitting the vote across a near-duplicate. Your own posts stay yours: edit one in place to fix a typo without losing the votes it has collected, or withdraw it, which removes the request and its votes for good. Every request also carries a Report action that sends it to Civitai moderators for review.\n\nVoting is one vote per person per request, and you can up-vote as many requests as you like. Click a vote again to take it back.\n\nAnyone can read the board signed out; posting, voting and reporting need a verified account at least seven days old and in good standing. Nothing here spends Buzz and nothing is generated — just ideas and votes. Posts are moderated, so keep it kind and constructive.",

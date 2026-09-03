@@ -64,6 +64,32 @@ ledger-*shaped* row, because `data` is unmoderated — so a forged record is
 ignored as a suppression and is never rendered as a request either. See
 `src/moderation.ts`.
 
+**Width.** The board lays out against **its own box**, not the browser window.
+A block is an iframe in whatever slot the host gave it, and slot width is not
+monotonic in viewport width — the `model.sidebar_top` slot is ~360px on a phone
+and only ~430px on a 1440px desktop — so `useBlockBreakpoint(rootRef)` observes
+the block root with a `ResizeObserver` and reports a tier on civitai's px scale
+(`480 / 768 / 1024 / 1184 / 1440`, **not** Mantine's stock em scale, which agrees
+on 768 alone). `src/layout.ts` is the only place a threshold is named:
+
+| tier | toolbar | hero CTA | request row |
+|---|---|---|---|
+| `base` (< 480) | stacked, sort switcher full-width | own line, stretched | vote pill in the row's footer |
+| `xs` (480–767) | stacked, sort switcher full-width | own line, stretched | vote pill back in the left rail |
+| `sm`+ (≥ 768) | one row | inline, right-aligned | left rail — the 0.3.x layout, unchanged |
+
+🔴 Two properties hold that together, and both are asserted rather than assumed.
+**Unmeasured is not narrow:** the hook reports `tier: 'base'` before its first
+measurement lands, which is indistinguishable from a 360px slot, so every
+structural branch is gated on `measured` and the unmeasured frame renders the
+regular layout — no paint-then-undo. And **the two arrangements differ in
+arrangement only**: every element, every `data-testid` and every handler exists
+at every tier, which is what keeps the store-capture recipe's `board-ready`
+anchor and its two ordinal `sort-control` selectors valid at all widths.
+Purely cosmetic scaling is `clamp()` in the inline styles rather than a
+stylesheet media query — an inline style outranks any non-`!important` rule, so
+a media query here would ship inert.
+
 **Brand.** The app runs at `brandDepth: skin` (see `taste.json`): it owns its
 own palette (`src/brand.ts`) rather than inheriting the host's `--civitai-*`
 surface tokens, and re-points the design-system pack at it so pack components
