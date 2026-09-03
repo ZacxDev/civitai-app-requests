@@ -248,6 +248,67 @@ export function splitCssMediaBlocks(css: string): CssRegions {
   return { base, media };
 }
 
+export interface CssRule {
+  /** The selector text, whitespace-collapsed. */
+  selector: string;
+  /** The declaration block, with the wrapping braces removed. */
+  body: string;
+}
+
+/**
+ * Every top-level `selector { … }` rule in a chunk of CSS.
+ *
+ * Needed because `splitCssMediaBlocks` answers "is this value inside an
+ * `@media`?" and the boot stylesheet now has a THIRD region that is neither:
+ * the `:root[data-civitai-boot-theme='…']` rules, which carry both palettes at
+ * the unconditioned level so the host's answer can outrank the OS guess in both
+ * directions. Without this the "dark is the base" assertion would have to be
+ * weakened to accommodate them, which would retire the guard rather than adapt
+ * it — the light values genuinely ARE in the base region now, and the claim
+ * worth keeping is the narrower one: they are reachable ONLY through an
+ * explicit `='light'` selector.
+ *
+ * At-rules (`@keyframes`, and any `@media` a caller did not split out first)
+ * are SKIPPED rather than emitted: their inner blocks are not plain rules, and
+ * emitting the at-rule with its whole nested body would smuggle those
+ * declarations into a caller's per-selector reasoning. Brace-matched for the
+ * same reason `splitCssMediaBlocks` is — `@keyframes` nests.
+ */
+export function topLevelRulesIn(css: string): CssRule[] {
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules: CssRule[] = [];
+  let i = 0;
+
+  while (i < source.length) {
+    const open = source.indexOf('{', i);
+    if (open === -1) break;
+
+    const selector = source.slice(i, open).trim().replace(/\s+/g, ' ');
+
+    let depth = 0;
+    let end = -1;
+    for (let j = open; j < source.length; j++) {
+      if (source[j] === '{') depth++;
+      else if (source[j] === '}') {
+        depth--;
+        if (depth === 0) {
+          end = j;
+          break;
+        }
+      }
+    }
+    // Unbalanced tail: stop rather than emit a rule whose body is a guess.
+    if (end === -1) break;
+
+    if (selector.length > 0 && !selector.startsWith('@')) {
+      rules.push({ selector, body: source.slice(open + 1, end) });
+    }
+    i = end + 1;
+  }
+
+  return rules;
+}
+
 /**
  * Every `--custom-property: value` declaration in a chunk of CSS, keyed by
  * property name. Values are lower-cased and whitespace-collapsed so a

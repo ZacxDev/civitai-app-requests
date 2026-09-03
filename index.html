@@ -8,13 +8,106 @@
       `color-scheme` resolves left-to-right against the viewer's preference, so
       `light dark` would paint the UA canvas LIGHT for a viewer with NO
       preference. This app's own `palette()` (src/brand.ts) already resolves an
-      unknown/absent theme to DARK — the host sends no BLOCK_INIT theme before
-      the bundle runs, so the boot theme is a guess and this is the same guess
-      the app makes. Keep the two in step.
+      unknown/absent theme to DARK, so dark is what "we do not know yet" means
+      everywhere in this app. Keep the two in step.
     -->
     <meta name="color-scheme" content="dark light" />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231971c2'/></svg>" />
     <title>App Requests</title>
+    <script>
+      /* ───────────────────────────────────────────────────────────────────────
+         BOOT THEME, resolved BEFORE first paint.
+
+         Two consumers, one answer. This script records its result on
+         `<html data-civitai-boot-theme>`; the stylesheet below paints off that
+         attribute, and `bootThemeGuess()` in src/bootTheme.ts READS THE SAME
+         ATTRIBUTE BACK so React's pre-`ready` commit paints the identical
+         colour. Reading it back — rather than re-deriving it — is what makes
+         "they agree" a fact instead of a hope.
+
+         🔴 WHY REACT CANNOT JUST USE `useBlockContext().theme` HERE. The SDK's
+         pre-init snapshot hardcodes `theme: 'light'`
+         (@civitai/blocks-react dist/internal/transport.js, EMPTY_SNAPSHOT) and
+         `useBlockContext` returns it unchanged, so before BLOCK_INIT that value
+         is a SENTINEL, not a signal — indistinguishable from a host that really
+         is light. Honouring it would paint every viewer light for the ~100ms
+         until BLOCK_INIT lands: with the skeleton below dark, that is
+         dark → light → dark, a NEW flash introduced at exactly the moment
+         `bootSkeleton: true` removes the host's veil that used to hide it.
+
+         🔴 THIS DUPLICATES `parseBlockInitFragment` FROM @civitai/app-sdk ON
+         PURPOSE, and must not import it: the SDK arrives with the bundle, which
+         is precisely what has not loaded yet. The duplication is a real drift
+         risk, so it is pinned — src/bootFragment.test.ts extracts THIS script
+         out of THIS file, runs it, and feeds the SDK's own
+         `encodeBlockInitFragment` output through it.
+
+         🔴 DIVERGENCE FROM THE generate-from-model REFERENCE, deliberate: every
+         fallback here is DARK, not light. `palette()` (src/brand.ts) resolves an
+         unknown/absent theme to DARK and the stylesheet below is dark-base with
+         light only inside `@media (prefers-color-scheme: light)`. A light
+         fallback would contradict the very file this script exists to support.
+
+         🔴 KNOWN, DELIBERATE NARROWING vs the SDK: `URLSearchParams`
+         percent-decodes and these regexes do not, so `theme=%64ark` and
+         `civitai%2dblock=v1` are read by the SDK and ignored here. That
+         direction is safe — it falls back to the OS guess, then to dark. The
+         encoder never emits either form.
+
+         Total: any malformed, absent, truncated or future-version fragment
+         falls through rather than throwing.
+         ─────────────────────────────────────────────────────────────────── */
+      (function () {
+        var t = 'dark';
+        try {
+          var h = (location.hash || '').replace(/^#/, '');
+          var resolved = null;
+          /* Read the FIRST `civitai-block` key and require exactly `v1`. An
+             unknown version must degrade to "no fast path", never to a
+             partially-trusted read.
+
+             🔴 An unanchored `/civitai-block=v1/.test(h)` is WRONG and is the
+             one way a copy like this diverges from the SDK in the DANGEROUS
+             direction: on `#civitai-block=v2&civitai-block=v1&theme=light` the
+             SDK reads the FIRST marker (`URLSearchParams.get`), sees `v2` and
+             refuses — while an unanchored test finds the SECOND and accepts.
+             Matching the first key reproduces the SDK's precedence. */
+          var mk = /(^|&)civitai-block=([^&]*)/.exec(h);
+          if (mk && mk[2] === 'v1') {
+            /* Same first-key rule as the marker, for the same reason:
+               `URLSearchParams.get` returns the FIRST `theme`, so
+               `theme=blue&theme=dark` is `blue` to the SDK — invalid, hence no
+               fast path. A regex that skipped the invalid one and matched the
+               later valid one would accept what the SDK refuses, and paint a
+               theme the host never asked for. Fixing only the marker key leaves
+               this one with the identical defect. */
+            var mt = /(^|&)theme=([^&]*)/.exec(h);
+            if (mt && (mt[2] === 'dark' || mt[2] === 'light')) resolved = mt[2];
+          }
+          if (resolved) {
+            t = resolved;
+          } else {
+            /* The OS guess, and note which way round it is asked: LIGHT is the
+               positive case, dark is the default. `no-preference`, and any UA
+               without the query at all, therefore lands on dark — the same way
+               the stylesheet below resolves it, because light lives only inside
+               `@media (prefers-color-scheme: light)` there too. */
+            t =
+              window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+                ? 'light'
+                : 'dark';
+          }
+        } catch (e) {
+          t = 'dark';
+        }
+        try {
+          document.documentElement.setAttribute('data-civitai-boot-theme', t);
+        } catch (e) {
+          /* Nothing left to do. src/bootTheme.ts falls back to the OS query and
+             then to dark, so the app still agrees with the unattributed CSS. */
+        }
+      })();
+    </script>
     <!--
       ─────────────────────────────────────────────────────────────────────────
       BOOT SKELETON — paints before any script, and is what `bootSkeleton: true`
@@ -85,6 +178,49 @@
           --ar-boot-surface-2: #fdf3e3;
           --ar-boot-border: #e2d5bd;
         }
+      }
+
+      /* ---- the HOST's answer, when there is one, outranks the OS guess ----
+
+         The two rules below are driven by `data-civitai-boot-theme`, which the
+         inline script in <head> sets from the init fragment. They must exist in
+         BOTH directions and they must both sit here, AFTER the media block:
+
+           host dark  + OS light → the media block would paint light
+           host light + OS dark  → the base rules would paint dark
+
+         …and each of those is a repaint at BLOCK_INIT, i.e. the exact flash this
+         whole file exists to remove. `:root[…]` is (0,2,0) against the media
+         block's (0,1,0) and the base `html` rule's (0,0,1), so it wins on
+         specificity in both directions rather than on source order alone.
+
+         🔴 These are NOT a third palette. Every value is the same literal as the
+         base rules / the light media block above, and `bootSkeleton.test.tsx`
+         asserts each one against `palette()` in src/brand.ts, per region — so a
+         palette change that misses one of the four copies goes red.
+
+         🔴 The unconditioned base rules stay DARK-ONLY. A light value reachable
+         without either the media query or an explicit `='light'` attribute would
+         make dark stop being what "no information" means, which is the rule the
+         whole file is built on. That is asserted structurally, not eyeballed. */
+      :root[data-civitai-boot-theme='dark'] {
+        color-scheme: dark;
+        background: #14110c;
+
+        --ar-boot-body: #14110c;
+        --ar-boot-surface: #1c1813;
+        --ar-boot-surface-2: #262019;
+        --ar-boot-border: #40362b;
+      }
+
+      :root[data-civitai-boot-theme='light'] {
+        color-scheme: light;
+        background: #fffbf4;
+
+        --ar-boot-body: #fffbf4;
+        --ar-boot-surface: #ffffff;
+        --ar-boot-surface-2: #fdf3e3;
+        --ar-boot-border: #e2d5bd;
       }
 
       /* ---- geometry ----

@@ -10,8 +10,10 @@ import {
   checkBootSkeletonPaintsWithoutNetwork,
   customPropertiesIn,
   splitCssMediaBlocks,
+  topLevelRulesIn,
   validateBootSkeletonDocument,
 } from './bootSkeleton.js';
+import { BOOT_THEME_ATTRIBUTE } from './bootTheme.js';
 import { palette } from './brand.js';
 import { HERO_BAND_INK } from './hero.js';
 
@@ -233,6 +235,29 @@ describe('dark is the default, structurally', () => {
   const css = bootStyleText(doc);
   const regions = splitCssMediaBlocks(css);
 
+  /**
+   * The base region now has TWO kinds of rule and they mean different things:
+   *
+   *   - UNSCOPED rules — what a viewer gets with no information at all. These
+   *     must be dark-only; that is the rule the whole file rests on.
+   *   - rules scoped to `[data-civitai-boot-theme='…']` — the HOST's answer,
+   *     which legitimately carries BOTH palettes because it has to be able to
+   *     outrank the OS guess in either direction.
+   *
+   * Lumping them together would either weaken the dark-default claim to nothing
+   * or fail on a correct file, so they are separated and each one is asserted
+   * for what it actually promises.
+   */
+  const baseRules = topLevelRulesIn(regions.base);
+  const unscoped = baseRules.filter((r) => !r.selector.includes(BOOT_THEME_ATTRIBUTE));
+  const scopedDark = baseRules.filter((r) =>
+    r.selector.includes(`${BOOT_THEME_ATTRIBUTE}='dark'`),
+  );
+  const scopedLight = baseRules.filter((r) =>
+    r.selector.includes(`${BOOT_THEME_ATTRIBUTE}='light'`),
+  );
+  const unscopedText = unscoped.map((r) => r.body).join('\n');
+
   // 🔴 jsdom does not evaluate media queries, so `getComputedStyle()` here would
   // report the same values whichever way round the rules are written — a
   // vacuous green. The claim that has teeth is about WHERE each value lives in
@@ -266,13 +291,56 @@ describe('dark is the default, structurally', () => {
     expect(darkBlocks).toEqual([]);
   });
 
+  it('found both kinds of base rule — positive control for the partition', () => {
+    // Every assertion below reads one side of `unscoped` / `scoped*`. A splitter
+    // that returned nothing would make ALL of them vacuous, and the dark-default
+    // one would pass on a file that declares no palette at all.
+    expect(unscoped.length).toBeGreaterThan(0);
+    expect(scopedDark).toHaveLength(1);
+    expect(scopedLight).toHaveLength(1);
+    // …and the partition is exhaustive: no rule was silently dropped.
+    expect(unscoped.length + scopedDark.length + scopedLight.length).toBe(baseRules.length);
+  });
+
   it('carries the DARK palette in the UNCONDITIONED base rules', () => {
-    expect(customPropertiesIn(regions.base)).toEqual({
+    // "Unconditioned" = no media query AND no boot-theme attribute: what a
+    // viewer gets when nothing is known about them. It is dark, and only dark.
+    expect(customPropertiesIn(unscopedText)).toEqual({
       '--ar-boot-body': hex(DARK.body),
       '--ar-boot-surface': hex(DARK.surface),
       '--ar-boot-surface-2': hex(DARK.surface2),
       '--ar-boot-border': hex(DARK.border),
     });
+  });
+
+  it('lets the HOST override the OS guess in BOTH directions', () => {
+    // 🔴 One direction is not enough and the missing one is silent. Without the
+    // `='light'` rule a light host + a dark-mode OS keeps the dark base and then
+    // flips light at BLOCK_INIT; without the `='dark'` rule a dark host + a
+    // light-mode OS keeps the media block's light and then flips dark. Both are
+    // the flash this file exists to remove, and neither shows up in a test that
+    // only checks the direction someone happened to write first.
+    expect(customPropertiesIn(scopedDark[0]?.body ?? '')).toEqual({
+      '--ar-boot-body': hex(DARK.body),
+      '--ar-boot-surface': hex(DARK.surface),
+      '--ar-boot-surface-2': hex(DARK.surface2),
+      '--ar-boot-border': hex(DARK.border),
+    });
+    expect(customPropertiesIn(scopedLight[0]?.body ?? '')).toEqual({
+      '--ar-boot-body': hex(LIGHT.body),
+      '--ar-boot-surface': hex(LIGHT.surface),
+      '--ar-boot-surface-2': hex(LIGHT.surface2),
+      '--ar-boot-border': hex(LIGHT.border),
+    });
+  });
+
+  it('scopes those overrides to :root so they outrank the media block', () => {
+    // (0,2,0) beats the media block's `:root` (0,1,0) and the base `html`
+    // (0,0,1) — in both directions, and independent of source order. A bare
+    // `[data-civitai-boot-theme='light']` descendant selector would not.
+    for (const rule of [...scopedDark, ...scopedLight]) {
+      expect(rule.selector).toMatch(/^:root\[data-civitai-boot-theme='(dark|light)'\]$/);
+    }
   });
 
   it('paints the UA canvas dark from a base rule, independent of color-scheme support', () => {
@@ -297,14 +365,17 @@ describe('dark is the default, structurally', () => {
     });
   });
 
-  it('leaks no LIGHT-only colour into the base rules', () => {
+  it('leaks no LIGHT-only colour into the UNCONDITIONED rules', () => {
     const lightOnly = [LIGHT.surface2, LIGHT.border].map(hex);
-    const mediaBody = regions.media.map((m) => m.body).join('\n').toLowerCase();
+    const mediaBody = regions.media
+      .map((m) => m.body)
+      .join('\n')
+      .toLowerCase();
     for (const value of lightOnly) {
       // Positive control on the search itself: find the string where it DOES
-      // live before asserting it is absent from base.
+      // live before asserting it is absent from the unconditioned rules.
       expect(mediaBody).toContain(value);
-      expect(regions.base.toLowerCase()).not.toContain(value);
+      expect(unscopedText.toLowerCase()).not.toContain(value);
     }
   });
 });
@@ -318,15 +389,19 @@ describe('the skeleton cannot drift from the app palette', () => {
     // live, this one pins that they are the APP's values and not a hand-picked
     // grey that would flash at the handoff.
     //
-    // Collected PER REGION and then unioned. Running customPropertiesIn over
-    // the whole sheet would key by property NAME, so the light block's four
-    // declarations would overwrite the base's four and the union would silently
-    // be half the size it looks — a count assertion passing for the wrong
-    // reason.
-    const declared = new Set<string>([
-      ...Object.values(customPropertiesIn(regions.base)),
-      ...regions.media.flatMap((m) => Object.values(customPropertiesIn(m.body))),
-    ]);
+    // 🔴 Collected PER RULE, not per region. `customPropertiesIn` keys by
+    // property NAME, so any two rules declaring the same four names collapse to
+    // four entries and the union is silently a quarter of the size it looks.
+    // Per-REGION was already too coarse and the base region now proves it: it
+    // holds three rules declaring the same four names (unscoped dark, scoped
+    // dark, scoped light), and reading the region as one string returns only the
+    // last of the three — which made this assertion compare four light values
+    // against the expected eight.
+    const declared = new Set<string>(
+      [regions.base, ...regions.media.map((m) => m.body)]
+        .flatMap((chunk) => topLevelRulesIn(chunk))
+        .flatMap((rule) => Object.values(customPropertiesIn(rule.body))),
+    );
 
     const known = [
       DARK.body,
