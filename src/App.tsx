@@ -34,6 +34,7 @@ import {
 import { ToastProvider, injectStyles, useToast } from '@civitai/components-react';
 
 import { paletteCssVars } from './brand.js';
+import { bootThemeGuess } from './bootTheme.js';
 import {
   horizonModeFor,
   horizonNote,
@@ -504,13 +505,32 @@ function Board() {
     ? `${shown.length} of ${visible.length} loaded request${visible.length === 1 ? '' : 's'}`
     : '';
 
-  const rootStyle: CSSProperties = { ...pageStyle, ...(paletteCssVars(theme) as CSSProperties) };
+  /**
+   * 🔴 `theme` FROM THE SDK IS A SENTINEL UNTIL `ready`.
+   *
+   * The pre-init snapshot hardcodes `theme: 'light'` for every viewer
+   * (`@civitai/blocks-react` → `dist/internal/transport.js`, `EMPTY_SNAPSHOT`),
+   * and this component renders before BLOCK_INIT arrives. Painting that value
+   * would put a LIGHT first commit between index.html's DARK skeleton and the
+   * host's real theme: dark → light → dark, newly visible now that
+   * `bootSkeleton: true` has stood down the host's veil.
+   *
+   * So before `ready` we paint whatever the boot script already painted with —
+   * read back off `<html>`, not re-derived. AFTER `ready` this is exactly the
+   * old expression: the host's theme wins, unconditionally.
+   */
+  const paintTheme = ready ? theme : bootThemeGuess();
+
+  const rootStyle: CSSProperties = {
+    ...pageStyle,
+    ...(paletteCssVars(paintTheme) as CSSProperties),
+  };
 
   return (
     <div
       ref={rootRef}
       data-app="app-requests"
-      data-theme={theme}
+      data-theme={paintTheme}
       data-testid="app-root"
       style={rootStyle}
     >

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { customPropertiesIn, splitCssMediaBlocks } from './bootSkeleton.js';
+import { customPropertiesIn, splitCssMediaBlocks, topLevelRulesIn } from './bootSkeleton.js';
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
@@ -81,6 +81,61 @@ describe('splitCssMediaBlocks', () => {
     const { base, media } = splitCssMediaBlocks('/* } */ html { color: red; } /* @media { */');
     expect(media).toEqual([]);
     expect(base).toContain('color: red');
+  });
+});
+
+/**
+ * `topLevelRulesIn` is the second half of the instrument: `bootSkeleton.test.tsx`
+ * uses it to separate the UNCONDITIONED base rules (which must be dark-only)
+ * from the `[data-civitai-boot-theme='…']` rules (which carry both palettes on
+ * purpose). If it returned `[]`, the dark-default assertion over there would
+ * compare an empty map against four expected values and fail loudly — but the
+ * mirror image, an at-rule's nested declarations leaking into a "rule", passes
+ * silently and poisons the partition. Both directions are pinned here, on
+ * synthetic CSS whose answer is known by construction.
+ */
+describe('topLevelRulesIn', () => {
+  it('splits plain rules and keeps selector and body apart', () => {
+    expect(topLevelRulesIn('html { background: #000; }\n:root { --x: 1; }')).toEqual([
+      { selector: 'html', body: ' background: #000; ' },
+      { selector: ':root', body: ' --x: 1; ' },
+    ]);
+  });
+
+  it('collapses whitespace inside a selector so attribute rules compare equal', () => {
+    const rules = topLevelRulesIn(":root[data-civitai-boot-theme='dark']\n  { --x: 1; }");
+    expect(rules.map((r) => r.selector)).toEqual([":root[data-civitai-boot-theme='dark']"]);
+  });
+
+  it('🔴 SKIPS at-rules instead of emitting their nested bodies', () => {
+    // The real sheet's shape: `@keyframes` with two nested blocks sits in the
+    // base region. Emitting it as a "rule" would drop `opacity: 1` into the
+    // caller's per-selector reasoning; a naive `[^}]*` scan would additionally
+    // mistake `50% { … }` for a top-level rule and resume mid-block.
+    const rules = topLevelRulesIn(
+      'a { color: red; }' +
+        '@keyframes p { 0%, 100% { opacity: 1; } 50% { opacity: 0.62; } }' +
+        'b { color: blue; }',
+    );
+    expect(rules.map((r) => r.selector)).toEqual(['a', 'b']);
+    // Negative control on the other side: the rule AFTER the at-rule survived
+    // with its real body, so the scan resumed at the right place.
+    expect(rules[1]?.body).toContain('color: blue');
+    expect(rules.map((r) => r.body).join('')).not.toContain('opacity');
+  });
+
+  it('strips comments so a brace inside one cannot unbalance the scan', () => {
+    const rules = topLevelRulesIn('/* } */ a { color: red; } /* { */');
+    expect(rules.map((r) => r.selector)).toEqual(['a']);
+  });
+
+  it('stops on an unbalanced tail rather than guessing a body', () => {
+    const rules = topLevelRulesIn('a { color: red; } b { color: blue;');
+    expect(rules.map((r) => r.selector)).toEqual(['a']);
+  });
+
+  it('returns [] for CSS with no rules — the honest zero', () => {
+    expect(topLevelRulesIn('/* nothing here */')).toEqual([]);
   });
 });
 
