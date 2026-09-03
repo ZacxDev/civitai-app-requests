@@ -21,6 +21,26 @@ export interface SearchFieldProps {
   /** Announced count of matches, e.g. "3 of 12 requests". Rendered in a live region. */
   resultSummary?: string;
   placeholder?: string;
+  /**
+   * The flow of the toolbar this field sits in.
+   *
+   * 🔴 A FLEX BASIS IS AXIS-RELATIVE, AND THAT IS WHY THIS PROP EXISTS. In a
+   * `row` toolbar `flex: 1 1 220px` means "at least 220px WIDE, then grow" —
+   * which is what it was written for. When the toolbar flips to `column` the
+   * main axis becomes vertical and the identical declaration means "220px
+   * TALL", with `flex-grow: 1` holding it there. Measured in a real Chromium at
+   * 375px: the wrapper laid out at **220px around 53px of content**, ~167px of
+   * dead space between the field and the sort switcher — while every
+   * attribute-level assertion stayed green, because the layout DECISION was
+   * right and only the SIZING was wrong. jsdom has no layout engine, so the
+   * suite could not see it.
+   *
+   * `stacked` therefore drops to a content-sized basis; the toolbar's own
+   * `align-items: stretch` supplies the full width.
+   *
+   * Defaults to `row` — the 0.3.x behaviour, unchanged.
+   */
+  toolbar?: 'row' | 'stacked';
   'data-testid'?: string;
 }
 
@@ -29,6 +49,7 @@ export function SearchField({
   onChange,
   resultSummary,
   placeholder = 'Search requests…',
+  toolbar = 'row',
   'data-testid': testId = 'search',
 }: SearchFieldProps): React.JSX.Element {
   const inputId = useId();
@@ -36,7 +57,7 @@ export function SearchField({
   const reduced = useReducedMotion();
 
   return (
-    <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+    <div style={toolbar === 'stacked' ? stackedWrapStyle : rowWrapStyle}>
       <label htmlFor={inputId} style={srOnly}>
         Search requests
       </label>
@@ -86,6 +107,14 @@ export function SearchField({
     </div>
   );
 }
+
+// The two wrappers, and the ONLY difference between them is which axis the
+// basis lands on. `minWidth: 0` is kept in both — in a row it is what lets the
+// field actually shrink below its content; in a column it is inert but harmless,
+// and dropping it would make the two look more different than they are.
+const rowWrapStyle: CSSProperties = { flex: '1 1 220px', minWidth: 0 };
+// 🔴 `flex-basis: auto` — a LENGTH here is a height. See the `toolbar` prop.
+const stackedWrapStyle: CSSProperties = { flex: '0 0 auto', minWidth: 0 };
 
 const fieldStyle: CSSProperties = {
   display: 'flex',

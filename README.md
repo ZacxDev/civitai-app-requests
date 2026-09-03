@@ -64,6 +64,32 @@ ledger-*shaped* row, because `data` is unmoderated — so a forged record is
 ignored as a suppression and is never rendered as a request either. See
 `src/moderation.ts`.
 
+**Width.** The board lays out against **its own box**, not the browser window.
+A block is an iframe in whatever slot the host gave it, and slot width is not
+monotonic in viewport width — the `model.sidebar_top` slot is ~360px on a phone
+and only ~430px on a 1440px desktop — so `useBlockBreakpoint(rootRef)` observes
+the block root with a `ResizeObserver` and reports a tier on civitai's px scale
+(`480 / 768 / 1024 / 1184 / 1440`, **not** Mantine's stock em scale, which agrees
+on 768 alone). `src/layout.ts` is the only place a threshold is named:
+
+| tier | toolbar | hero CTA | request row |
+|---|---|---|---|
+| `base` (< 480) | stacked, sort switcher full-width | own line, stretched | vote pill in the row's footer |
+| `xs` (480–767) | stacked, sort switcher full-width | own line, stretched | vote pill back in the left rail |
+| `sm`+ (≥ 768) | one row | inline, right-aligned | left rail — the 0.3.x layout, unchanged |
+
+🔴 Two properties hold that together, and both are asserted rather than assumed.
+**Unmeasured is not narrow:** the hook reports `tier: 'base'` before its first
+measurement lands, which is indistinguishable from a 360px slot, so every
+structural branch is gated on `measured` and the unmeasured frame renders the
+regular layout — no paint-then-undo. And **the two arrangements differ in
+arrangement only**: every element, every `data-testid` and every handler exists
+at every tier, which is what keeps the store-capture recipe's `board-ready`
+anchor and its two ordinal `sort-control` selectors valid at all widths.
+Purely cosmetic scaling is `clamp()` in the inline styles rather than a
+stylesheet media query — an inline style outranks any non-`!important` rule, so
+a media query here would ship inert.
+
 **Brand.** The app runs at `brandDepth: skin` (see `taste.json`): it owns its
 own palette (`src/brand.ts`) rather than inheriting the host's `--civitai-*`
 surface tokens, and re-points the design-system pack at it so pack components
@@ -136,6 +162,7 @@ exists.
 ```bash
 npm run dev:harness &                 # or: vite preview, to measure the BUILT css
 npm run measure:search-clear          # --url http://localhost:5187 by default
+npm run measure:toolbar               # stacked-toolbar geometry at 4 widths
 ```
 
 jsdom does not render. It has no layout, no user-agent pseudo-elements and no
@@ -161,6 +188,35 @@ Two things it taught, both easy to get wrong:
   minifies `-webkit-appearance` out of the fix for this project's target, so
   dist ships only the unprefixed declaration. It still works — but the source
   and the artifact are different files and only one of them is the product.
+
+`scripts/measure-toolbar-geometry.mjs` is the second instrument in this layer,
+and it exists because the width-adaptive work walked straight into the same
+trap. 🔴 **A flex basis is axis-relative, so flipping a container re-aims it.**
+The search wrapper carried `flex: 1 1 220px`, written for a row where `220px`
+is a minimum *width*; the stacked toolbar sets `flex-direction: column`, and the
+identical declaration became a 220px **height** with `flex-grow: 1` holding it
+there. Measured at 375px: the wrapper laid out at **220px around 53px of
+content — ~167px of dead space**, while every assertion in the suite stayed
+green, because `data-layout` really did read `stacked` and every testid really
+was present. The layout *decision* was right; only the *sizing* was wrong, and
+sizing is precisely what jsdom does not have.
+
+It measures two things that fail differently — each toolbar child's box height
+against the union of its own children's boxes (the **effect**, in pixels), and
+each child's resolved `flex-basis` while the container is a column (the
+**mechanism**) — at 375 / 519 / 900 / 1440, and it carries the same
+control-must-move property as the script above: the toolbar's direction and the
+wrapper's basis have to *differ* between the narrow and wide widths, or an
+emulation that never applied would measure one width four times and report a
+confident PASS.
+
+The cause is also pinned in CI, where no browser is available: `src/responsive.test.tsx`
+walks the rendered tree and asserts that **no column flex container has a child
+with a fixed-length `flex-basis`** — the relationship, read off the resolved
+longhand, so `flex: 1 1 220px`, `flexBasis: '220px'` and `flex: 0 1 220px` are
+one finding and a reword cannot walk past it. Scanning by container *axis* is
+what lets the request row keep its perfectly correct `flex: 1 1 260px` in a row
+without a false positive.
 
 ## Submit
 
