@@ -13,12 +13,12 @@
 // whole load, strictly worse than never opting in. The manifest key and the
 // markup in index.html are one change with two halves, and nothing in a normal
 // build notices when the halves separate: the manifest stays valid, the app
-// still works, `npm run build` still passes, and the only symptom is a viewer
+// still works, `pnpm build` still passes, and the only symptom is a viewer
 // staring at nothing.
 //
 // `validateBootSkeletonDocument()` below is the platform's blocking gate
 // (`bootSkeleton-not-empty`), implemented verbatim, and `bootSkeleton.test.ts`
-// runs it against this repo's own index.html on every `npm test`. That is the
+// runs it against this repo's own index.html on every `pnpm test`. That is the
 // only thing keeping the two halves together.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -93,8 +93,8 @@ function containerLabel(container: Element): string {
  * Apply when the submitted manifest has `bootSkeleton === true`. The platform
  * runs this against the BUILT entry document, because a bundler can rewrite the
  * entry. `bootSkeleton.test.ts` runs it against the SOURCE `index.html`, which
- * is a weaker claim and deliberately so: `dist/` does not exist when `npm test`
- * runs (CI order is `npm test` then `npm run build`), and a test that quietly
+ * is a weaker claim and deliberately so: `dist/` does not exist when `pnpm test`
+ * runs (CI order is `pnpm test` then `pnpm build`), and a test that quietly
  * skips itself when its input is absent is worse than one whose scope is
  * stated. Vite copies the entry document through — rewriting only the module
  * `<script src>` — so the two agree today; if that ever stops being true, the

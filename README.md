@@ -124,9 +124,14 @@ injection).
 
 ## Develop
 
+The toolchain is pinned by a nix flake — `pnpm` and `node` are not expected on
+`PATH` outside it. `.nvmrc` is the single authority for the node major: the
+flake reads it and CI reads it via `actions/setup-node`'s `node-version-file`.
+
 ```bash
-npm install
-npm run dev:harness   # http://localhost:5187 — SDK mock host, seeded shared board
+direnv allow           # or: nix develop
+pnpm install --frozen-lockfile
+pnpm run dev:harness   # http://localhost:5187 — SDK mock host, seeded shared board
 ```
 
 The harness plays the civitai host locally via the published SDK
@@ -137,8 +142,8 @@ written to Civitai.
 ## Test + build
 
 ```bash
-npm run test    # vitest: pure-logic (node) + component/e2e (jsdom) suites
-npm run build   # tsc --noEmit && vite build → dist/
+pnpm test        # vitest: pure-logic (node) + component/e2e (jsdom) suites
+pnpm build       # tsc --noEmit && vite build → dist/
 ```
 
 Coverage, in three layers:
@@ -160,9 +165,9 @@ exists.
 ### 🔴 The fourth layer: what jsdom structurally cannot see
 
 ```bash
-npm run dev:harness &                 # or: vite preview, to measure the BUILT css
-npm run measure:search-clear          # --url http://localhost:5187 by default
-npm run measure:toolbar               # stacked-toolbar geometry at 4 widths
+pnpm run dev:harness &                 # or: vite preview, to measure the BUILT css
+pnpm run measure:search-clear          # --url http://localhost:5187 by default
+pnpm run measure:toolbar               # stacked-toolbar geometry at 4 widths
 ```
 
 jsdom does not render. It has no layout, no user-agent pseudo-elements and no

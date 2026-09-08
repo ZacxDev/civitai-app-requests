@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# nix-direnv's cached shell profile — a build artifact of `use flake`, not source.
+.direnv/
 *.log
 .DS_Store
 .vite/
