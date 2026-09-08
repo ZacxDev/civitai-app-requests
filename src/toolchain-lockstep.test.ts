@@ -33,8 +33,10 @@ import { describe, expect, it } from 'vitest';
  *          adding `packageManager` would change what the PLATFORM's builder
  *          does (`block.manifest.json`'s `buildCommand: pnpm run build` runs
  *          against that same file). So the major is written down twice and
- *          asserted equal here. This is the assertion that actually compares
- *          two values; the node ones assert a structure.
+ *          asserted equal here.
+ *
+ * The pnpm pin and the builder/CI package-manager check are the two assertions
+ * that actually compare two values; the node ones assert a structure.
  *
  * Read off disk rather than imported, for the same reason
  * `version-lockstep.test.ts` does it: `tsconfig.json` scopes `include` to
@@ -85,6 +87,47 @@ function settingsIn(block: string[]): Array<[string, string]> {
     .map((line) => line.match(/^\s*([A-Za-z][\w-]*):\s*(\S.*?)\s*$/))
     .filter((m): m is RegExpMatchArray => m !== null)
     .map((m) => [m[1], m[2]] as [string, string]);
+}
+
+/**
+ * The package manager CI actually INVOKES, read out of the workflow's commands.
+ *
+ * Not the presence of a `pnpm/action-setup` step, and emphatically not a
+ * hardcoded literal — which is what stood here until this helper landed. A
+ * setup step says only what is INSTALLED on the runner, and a workflow can
+ * install pnpm and then run npm; a literal says nothing about CI at all.
+ * Measured in this repo, on the unfixed assertion: with the setup step left in
+ * place and the three `run:` lines switched to `npm ci` / `npm test` /
+ * `npm run build`, all five assertions in this file stayed green — a CI job
+ * that never invokes pnpm, reported as agreeing with a manifest saying
+ * `pnpm run build`, which is the exact split this file is named for.
+ *
+ * Comments are stripped first so a line of prose mentioning `npm ci` is not
+ * mistaken for a step. Two or more distinct managers is not a package manager
+ * the builder can match, so it throws rather than picking one.
+ */
+function ciPackageManager(workflow: string): string {
+  const active = workflow.replace(/(^|\s)#.*$/gm, '$1');
+
+  const invoked = new Set(
+    [...active.matchAll(/\b(npm|pnpm|yarn|bun)\s+(?:install|ci|run|test|build|exec)\b/g)].map(
+      (m) => m[1],
+    ),
+  );
+
+  if (invoked.size === 0) {
+    throw new Error(
+      'ci.yml invokes no npm/pnpm/yarn/bun command — there is no CI package manager to compare against',
+    );
+  }
+  if (invoked.size > 1) {
+    throw new Error(
+      `ci.yml invokes more than one package manager (${[...invoked].sort().join(', ')}) — ` +
+        'the platform builder runs exactly one, so it cannot match all of them',
+    );
+  }
+
+  return [...invoked][0];
 }
 
 describe('toolchain lockstep', () => {
@@ -144,15 +187,23 @@ describe('toolchain lockstep', () => {
 
   it('keeps the platform builder on the same package manager as CI', () => {
     // `block.manifest.json`'s `buildCommand` is what the PLATFORM runs. This
-    // repo carries exactly one lockfile (pnpm's), so a manifest still saying
+    // repo carries exactly one lockfile (pnpm's), so a manifest saying
     // `npm run build` would hand the builder a tree npm cannot install
-    // reproducibly — and CI, which runs pnpm, would stay green throughout.
+    // reproducibly — and CI would stay green throughout, because CI installs
+    // from the lockfile it does have.
+    //
+    // Both sides are READ, neither is written down here. The CI side comes
+    // from the commands the workflow actually RUNS (see `ciPackageManager`),
+    // not from a setup step and not from a literal `'pnpm'`: either of those
+    // makes this assertion agree with a workflow it never looked at.
+    const ciManager = ciPackageManager(workflow);
+
     const manifest = JSON.parse(repoFile('../block.manifest.json')) as {
       buildCommand?: unknown;
     };
     if (typeof manifest.buildCommand !== 'string') {
       throw new Error('block.manifest.json has no string "buildCommand" to compare against');
     }
-    expect(manifest.buildCommand.split(/\s+/)[0]).toBe('pnpm');
+    expect(manifest.buildCommand.split(/\s+/)[0]).toBe(ciManager);
   });
 });
