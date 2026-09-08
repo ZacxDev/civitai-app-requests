@@ -57,7 +57,9 @@ deliberately does not declare — adding one would change what the *platform's*
 builder does, since `block.manifest.json`'s `buildCommand` runs against the same
 `package.json`. `src/toolchain-lockstep.test.ts` fails if those two drift, if
 someone hardcodes a node version back into the workflow, or if the manifest's
-`buildCommand` stops using pnpm while pnpm's is the only lockfile in the tree.
+`buildCommand` names a different package manager than the one CI's `run:` lines
+actually invoke — the *commands*, not the `pnpm/action-setup` step, because a
+workflow can install pnpm and then run npm.
 
 Only `x86_64-linux` is exercised. The flake evaluates for `aarch64-linux` and
 `aarch64-darwin` too; `x86_64-darwin` is absent because nixpkgs-unstable dropped
