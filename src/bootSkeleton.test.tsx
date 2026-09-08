@@ -37,7 +37,7 @@ import { HERO_BAND_INK } from './hero.js';
  * WHY THIS WHOLE FILE IS IN THE `dom` PROJECT, not the fast `node` one: the
  * gate operates on a parsed `Document`, and building one in the node project
  * means importing `jsdom` directly — which ships NO TypeScript types, so
- * `npm run build` (`tsc --noEmit && vite build`) fails with TS7016. The choice
+ * `pnpm build` (`tsc --noEmit && vite build`) fails with TS7016. The choice
  * was a new `@types/jsdom` devDependency or running here, where `DOMParser` is
  * already a global. The pure text-processing halves of the instrument
  * (`splitCssMediaBlocks`, `customPropertiesIn`) keep their own controls in

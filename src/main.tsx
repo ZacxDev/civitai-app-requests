@@ -15,7 +15,7 @@ import './index.css';
 
 // Dev harness entry.
 //   VITE_DEV_HARNESS=true  -> mount the SDK MOCK host (synthetic shared store,
-//                             no real data). `npm run dev:harness`.
+//                             no real data). `pnpm run dev:harness`.
 //   (unset)                -> render <App/> bare (the platform is the host).
 const useHarness = import.meta.env.VITE_DEV_HARNESS === 'true';
 
