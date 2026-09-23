@@ -68,7 +68,7 @@ const h = vi.hoisted(() => ({
   track: vi.fn(),
 }));
 
-vi.mock('@civitai/blocks-react', async (importOriginal) => ({
+vi.mock('./platform/index.js', async (importOriginal) => ({
   // 🔴 REAL MODULE FIRST, overrides after. The SDK hook surface below is still
   // stubbed; what the spread buys is that `useBlockBreakpoint` is the REAL
   // hook. jsdom has no `ResizeObserver`, so it stays `{ tier: 'base',
@@ -77,13 +77,12 @@ vi.mock('@civitai/blocks-react', async (importOriginal) => ({
   // 0.3.3 tree, and they do it against the real hook rather than a stub that
   // could drift from it. The width-tier behaviour is exercised in
   // src/responsive.test.tsx, which sets an observed width explicitly.
-  ...(await importOriginal<typeof import('@civitai/blocks-react')>()),
+  ...(await importOriginal<typeof import('./platform/index.js')>()),
   useBlockContext: () => h.ctx,
   useSharedStorage: () => h.shared,
   useRequestSignIn: () => ({ requestSignIn: h.requestSignIn }),
   useBlockAnalytics: () => ({ track: h.track }),
   useBlockResize: () => {},
-  getTransport: () => ({}),
 }));
 
 // Import App AFTER the mock is registered.

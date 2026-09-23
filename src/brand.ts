@@ -110,7 +110,7 @@ export function palette(theme: ThemeName | string | null | undefined): Palette {
  * The app-owned custom properties, applied INLINE on the block root.
  *
  * Inline beats every stylesheet rule, which matters for the second half of the
- * map: the `@civitai/blocks-react/ui` pack renders Buttons/Cards/Alerts off
+ * map: the `@civitai/components` pack renders Buttons/Cards/Alerts off
  * `--civitai-color-*`, so re-pointing those at our ramp is what makes the pack
  * components read as part of the skin instead of fighting it. Without that the
  * app would be two colour systems stacked.

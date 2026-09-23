@@ -1,20 +1,26 @@
-// End-to-end: drive the REAL <App/> against the published SDK mock host
-// (`createMockHost` via `<Harness>`), exercising the actual `SHARED_*`
-// postMessage round-trips with no hook mocking. Proves the app integrates with
-// the real transport + shared-store contract, not just our fakes.
+// End-to-end: drive the REAL <App/> against a fake civitai.com, with NO hook
+// mocking. Everything between the board and the network is the shipping code —
+// the platform hooks and the whole REST client, including its URL building,
+// query parameters, date revival and error handling. Only the server is fake.
+//
+// 🔴 THIS USED TO DRIVE A MOCK HOST OVER POSTMESSAGE, AND THAT IS EXACTLY WHY IT
+// CHANGED. After the move to `@civitai/sdk` the board sends no `SHARED_*`
+// messages; it makes HTTP calls. A mock host would now answer a conversation
+// nobody is having, and these tests would pass while exercising nothing. The
+// fake therefore sits where the real boundary moved to: `fetch`.
 //
 // Covers the three things a happy path cannot: the FAILURE-INJECTION path
-// (`shared.failNext` forces `SHARED_UNAVAILABLE`), the ANONYMOUS viewer, and the
-// vote-hydration regression.
+// (`failNext` forces a 503), the ANONYMOUS viewer, and the vote-hydration
+// regression.
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { Harness, type MockSharedSeed } from '@civitai/blocks-react/testing';
-
 import { App } from './App.js';
 import { OWNER_USER_ID } from './moderation.js';
+import { __configurePlatform } from './platform/client.js';
+import { createFakeCivitai, type MockSharedSeed } from './platform/testing.js';
 
 const VIEWER = { id: 7777, username: 'dev-viewer' };
 
@@ -29,17 +35,17 @@ function renderApp(extra?: {
   failNext?: number;
   theme?: 'light' | 'dark';
 }) {
-  return render(
-    <Harness
-      applyUrlToggles={false}
-      showLog={false}
-      theme={extra?.theme ?? 'dark'}
-      viewer={extra?.viewer === undefined ? VIEWER : extra.viewer}
-      shared={{ seed: extra?.seed ?? SEED, failNext: extra?.failNext }}
-    >
-      <App />
-    </Harness>,
-  );
+  const fake = createFakeCivitai({
+    viewer: extra?.viewer === undefined ? VIEWER : extra.viewer,
+    seed: extra?.seed ?? SEED,
+    failNext: extra?.failNext,
+    theme: extra?.theme ?? 'dark',
+  });
+  // Installed BEFORE render so the board's first call already sees the fake.
+  // `test-setup.ts` resets the singleton between tests, so no fake outlives its
+  // own test.
+  __configurePlatform({ transport: fake.transport, fetch: fake.fetch });
+  return render(<App />);
 }
 
 function rowFor(title: string): HTMLElement {
@@ -49,7 +55,7 @@ function rowFor(title: string): HTMLElement {
   return row;
 }
 
-describe('e2e against the SDK mock host', () => {
+describe('e2e against a fake civitai.com', () => {
   it('lists the seeded shared entries through the real transport', async () => {
     renderApp();
     expect(await screen.findByText('Prompt library app', {}, { timeout: 5000 })).toBeInTheDocument();
@@ -201,19 +207,58 @@ describe('e2e against the SDK mock host', () => {
     });
   });
 
+  /**
+   * 🔴 CURSOR PAGING, THROUGH THE REAL CLIENT. Added because a mutation sweep
+   * found it unguarded: deleting the `cursor` query parameter from
+   * `sharedStorage.list()` left the ENTIRE suite green. The board's own paging
+   * tests live in `App.test.tsx`, which MOCKS `useSharedStorage` — so they check
+   * that the board asks for the next page, never that the client sends the ask.
+   * Nothing else here paged, because every other seed is smaller than one page.
+   *
+   * The board requests `PAGE_SIZE` (25) rows at a time, so the winner is seeded
+   * at index 30 — reachable ONLY by following a cursor. With the parameter
+   * dropped the server re-serves page 1 forever and this row never appears.
+   */
+  it('follows the list cursor across pages, so a page-2 row can win Top', async () => {
+    const filler: MockSharedSeed[] = Array.from({ length: 40 }, (_, i) => ({
+      value: { title: `Filler request ${i}` },
+      authorUserId: 4021,
+      voters: [1],
+    }));
+    // Index 30 is on the SECOND page (page size 25) and out-votes everything.
+    filler[30] = {
+      value: { title: 'Winner from page two' },
+      authorUserId: 4021,
+      voters: Array.from({ length: 99 }, (_, n) => n + 1),
+    };
+
+    renderApp({ seed: filler });
+
+    expect(
+      await screen.findByText('Winner from page two', {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(within(rowFor('Winner from page two')).getByTestId('vote-count')).toHaveTextContent('99');
+  });
+
   describe('owner moderation', () => {
     it('an owner-authored ledger entry hides its target for every viewer', async () => {
       // Written by the OWNER, so every client honours it.
       renderApp({
         seed: [
           { value: { title: 'Ordinary request' }, authorUserId: 4021, voters: [1] },
-          { value: { title: 'Suppressed request' }, authorUserId: 4021, voters: [1, 2] },
+          {
+            key: 'row-to-suppress',
+            value: { title: 'Suppressed request' },
+            authorUserId: 4021,
+            voters: [1, 2],
+          },
           {
             value: {
               title: 'Moderation record',
-              // `shared_2` is the host-minted key of the second seed row (the mock
-              // mints `shared_<n>` in seed order) — this is the ledger's target.
-              data: { kind: 'app-requests/suppression', v: 1, target: 'shared_2' },
+              // The ledger names its target by key. The key is PINNED on the seed
+              // above rather than guessed: the real server mints an opaque ULID,
+              // so a hardcoded key would only ever match a fake's convention.
+              data: { kind: 'app-requests/suppression', v: 1, target: 'row-to-suppress' },
             },
             authorUserId: OWNER_USER_ID,
             voters: [],

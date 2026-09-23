@@ -8,6 +8,9 @@ import {
   type ErrorInfo,
 } from 'react';
 
+// The platform seam. Everything the board needs from Civitai — the viewer, the
+// theme, the shared-storage data layer, the iframe conversation — comes through
+// `./platform`, which is the only place that imports `@civitai/sdk`.
 import {
   useBlockAnalytics,
   useBlockBreakpoint,
@@ -17,22 +20,24 @@ import {
   useSharedStorage,
   type SharedAppendValue,
   type SharedListItem,
-} from '@civitai/blocks-react';
+} from './platform/index.js';
+// The design system. These used to come from the blocks-react bridge package's
+// `/ui` pack;
+// are the same components, now taken from the package that owns them.
 import {
   Alert,
-  Badge,
-  Button,
   Card,
-  Group,
   Loader,
-  Modal,
-  SegmentedControl,
-  Stack,
   Textarea,
   TextInput,
-  injectBlocksStyles,
-} from '@civitai/blocks-react/ui';
-import { ToastProvider, injectStyles, useToast } from '@civitai/components-react';
+  ToastProvider,
+  injectStyles,
+  useToast,
+} from '@civitai/components-react';
+// The rest come from the local adapters: the pack expresses gaps, colours and
+// the modal's prop names differently, and `./platform/ui` maps the board's
+// existing vocabulary onto it in one place. See that file's header.
+import { Badge, Button, Group, Modal, SegmentedControl, Stack } from './platform/ui.js';
 
 import { paletteCssVars } from './brand.js';
 import { bootThemeGuess } from './bootTheme.js';
@@ -90,9 +95,12 @@ import { VoteButton } from './components/VoteButton.js';
  * generation.
  */
 export function App() {
+  // One stylesheet now, not two. The board used to inject the `/ui` pack's
+  // sheet alongside the components pack's; every component it renders comes
+  // from the components pack after the port, so `injectStyles()` is the whole
+  // set. Both resolved against the same `--civitai-*` tokens, so nothing moves.
   const injectedRef = useRef(false);
   if (!injectedRef.current) {
-    injectBlocksStyles();
     injectStyles();
     injectedRef.current = true;
   }
@@ -522,7 +530,8 @@ function Board() {
    * 🔴 `theme` FROM THE SDK IS A SENTINEL UNTIL `ready`.
    *
    * The pre-init snapshot hardcodes `theme: 'light'` for every viewer
-   * (`@civitai/blocks-react` → `dist/internal/transport.js`, `EMPTY_SNAPSHOT`),
+   * (`@civitai/sdk` → `core/transport.ts`, `EMPTY_SNAPSHOT`, mirrored by
+   * `src/platform/hooks.ts`),
    * and this component renders before BLOCK_INIT arrives. Painting that value
    * would put a LIGHT first commit between index.html's DARK skeleton and the
    * host's real theme: dark → light → dark, newly visible now that

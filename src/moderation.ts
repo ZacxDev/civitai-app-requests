@@ -31,7 +31,7 @@
 // because free text belongs in the moderated `title`/`body` fields and a
 // moderation note is not something the board should render.
 
-import type { SharedAppendValue, SharedListItem } from '@civitai/blocks-react';
+import type { SharedAppendValue, SharedListItem } from './platform/index.js';
 
 /**
  * The Civitai user id that owns this app. Only entries authored by this id are

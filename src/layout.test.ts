@@ -1,4 +1,4 @@
-import { resolveBlockTier } from '@civitai/blocks-react';
+import { resolveBlockTier } from './platform/index.js';
 import { describe, expect, it } from 'vitest';
 
 import { boardLayout, breakpointForWidth, layoutForWidth, type BoardLayout } from './layout.js';

@@ -14,7 +14,7 @@
 
 import type { CSSProperties } from 'react';
 
-import { Button } from '@civitai/blocks-react/ui';
+import { Button } from '../platform/ui.js';
 import { useReducedMotion, transitionFor } from '../motion.js';
 import { tabularNums } from '../theme.js';
 

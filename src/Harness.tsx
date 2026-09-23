@@ -1,11 +1,8 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { OWNER_USER_ID } from './moderation.js';
-import {
-  Harness as SdkHarness,
-  type MockHostOptions,
-  type MockSharedSeed,
-} from '@civitai/blocks-react/testing';
+import { __configurePlatform } from './platform/client.js';
+import { createFakeCivitai, type MockSharedSeed } from './platform/testing.js';
 
 // 🔴 The mock chrome deliberately does NOT use the app's palette. Those tokens
 // (`--ar-*`) are written INLINE on the block root, which is a descendant of this
@@ -47,12 +44,17 @@ const SHARED_SEED: MockSharedSeed[] = [
 ];
 
 /**
- * Local dev mock host for the App Requests PAGE app. The real platform mounts
- * the block in a full-bleed iframe and answers the `SHARED_*` + `APP_STORAGE_*`
- * postMessage protocol from the shared/per-user datastores. Locally there's no
- * host, so the published SDK's `createMockHost` plays one — seeded with a small
- * board so the app is immediately usable. A loud banner + a tiny scenario panel
- * make it obvious this is synthetic (no real data written).
+ * Local dev fake for the App Requests PAGE app.
+ *
+ * The real platform mounts the block in a full-bleed iframe, hands it a block
+ * token, and serves its data from `/api/v1/blocks/shared-storage/*`. Locally
+ * there is neither, so this plays both: a scripted host that completes the
+ * handshake, and an in-memory server behind a fake `fetch`, seeded with a small
+ * board so the app is immediately usable.
+ *
+ * Everything between the board and that `fetch` is the REAL shipping code — the
+ * hooks and the whole REST client. A loud banner + a scenario panel make it
+ * obvious the data is synthetic (nothing is written to Civitai).
  */
 export function Harness({ children }: { children: ReactNode }) {
   // `viewer: undefined` → the SDK's default dev-viewer (id set by the mock host).
@@ -72,15 +74,33 @@ export function Harness({ children }: { children: ReactNode }) {
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('seed') === 'empty';
 
-  const options: MockHostOptions = {
-    viewer: anon
-      ? null
-      : asOwner
-        ? { id: OWNER_USER_ID, username: 'app-owner' }
-        : { id: 7777, username: 'dev-viewer' },
-    shared: { seed: emptySeed ? [] : SHARED_SEED, failNext: failNext || undefined },
-    theme: 'dark',
-  };
+  // Rebuilt whenever a scenario toggle changes `key`, which is also what
+  // re-mounts the board — so a fresh store and a fresh board arrive together
+  // and a scenario can never be read against the previous scenario's data.
+  const fake = useMemo(
+    () =>
+      createFakeCivitai({
+        viewer: anon
+          ? null
+          : asOwner
+            ? { id: OWNER_USER_ID, username: 'app-owner' }
+            : { id: 7777, username: 'dev-viewer' },
+        seed: emptySeed ? [] : SHARED_SEED,
+        failNext: failNext || undefined,
+        theme: 'dark',
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` IS the scenario identity
+    [key],
+  );
+
+  // Point the platform singleton at the fake BEFORE the board below renders and
+  // issues its first call. Done during render rather than in an effect for
+  // exactly that ordering reason; it only ever runs under the dev harness.
+  const configuredFor = useRef<number | null>(null);
+  if (configuredFor.current !== key) {
+    __configurePlatform({ transport: fake.transport, fetch: fake.fetch });
+    configuredFor.current = key;
+  }
 
   return (
     // The mock chrome is pinned to the dark terminal look (its own data-theme) so
@@ -111,11 +131,10 @@ export function Harness({ children }: { children: ReactNode }) {
           setKey((k) => k + 1);
         }}
       />
-      {/* applyUrlToggles kept on so ?viewer=anon etc. still work; the panel
-          re-mounts via `key` when it changes an init-only field (viewer). */}
-      <SdkHarness key={key} showLog={false} {...options}>
-        {children}
-      </SdkHarness>
+      {/* `key` re-mounts the board whenever a scenario changes something the
+          handshake decides (the viewer), so it re-initialises against the fake
+          that was just rebuilt above. */}
+      <div key={key}>{children}</div>
     </div>
   );
 }

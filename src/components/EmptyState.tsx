@@ -6,7 +6,7 @@
 
 import type { ReactNode } from 'react';
 
-import { Stack } from '@civitai/blocks-react/ui';
+import { Stack } from '../platform/ui.js';
 import { token, radius, metaText } from '../theme.js';
 
 export interface EmptyStateProps {

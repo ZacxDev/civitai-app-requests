@@ -1,7 +1,7 @@
 // Pure presentation helpers for the App Requests board. Kept framework-free so
 // they're covered by fast node (*.test.ts) unit tests.
 
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from './platform/index.js';
 
 export type SortMode = 'top' | 'newest';
 

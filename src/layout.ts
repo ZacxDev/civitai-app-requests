@@ -38,7 +38,11 @@
 // decisions that change the DOM.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { resolveBlockTier, type BlockBreakpoint, type BlockSizeTier } from '@civitai/blocks-react';
+import {
+  resolveBlockTier,
+  type BlockBreakpoint,
+  type BlockSizeTier,
+} from './platform/index.js';
 import { BREAKPOINT_KEYS } from '@civitai/theme';
 
 /** Ascending tier order — `base` first, then civitai's px scale. */

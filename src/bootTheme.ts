@@ -5,8 +5,8 @@
  * 🔴 WHY `useBlockContext().theme` IS UNUSABLE HERE
  *
  * The SDK's pre-init snapshot hardcodes `theme: 'light'`
- * (`@civitai/blocks-react` → `dist/internal/transport.js`, `EMPTY_SNAPSHOT`),
- * and `useBlockContext` returns `snap.theme` unchanged. So before `ready` that
+ * (`@civitai/sdk` → `core/transport.ts`, `EMPTY_SNAPSHOT`), and
+ * `src/platform/hooks.ts` seeds `useBlockContext` with the same sentinel. So before `ready` that
  * value is a SENTINEL for EVERY viewer — literally indistinguishable from a host
  * that really is light.
  *
@@ -44,12 +44,12 @@ export type BootTheme = 'dark' | 'light';
  *
  * 🔴 DO NOT "simplify" this to `parseBlockInitFragment(location.hash)`. The
  * SDK's own `iframeTransport` reads the fragment during its init and then STRIPS
- * it from the URL (`stripBlockInitFragment` + `history.replaceState`,
- * `@civitai/blocks-react` → `dist/internal/iframeTransport.js`). That init runs
+ * it from the URL (`history.replaceState`, `@civitai/sdk` →
+ * `core/transports/iframe-transport.ts`). That init runs
  * before this component renders, so by the time we get here the hash is already
  * empty and the read falls through — producing exactly the repaint this function
  * exists to prevent. A jsdom test CANNOT see this: mocking
- * `@civitai/blocks-react` means the transport never runs and never strips, so
+ * `./platform` means the transport never runs and never strips, so
  * the wrong code looks right. The attribute is written before the bundle exists
  * and is never stripped, which is why it is the thing to read.
  */
