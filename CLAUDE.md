@@ -165,10 +165,17 @@ file, the incident they exist to prevent.
 - The tree carries exactly **one** lockfile, `pnpm-lock.yaml`. The manifest's
   `buildCommand` is `pnpm run build` and the platform runs it against this same
   `package.json` — which is why no `packageManager` field is declared here.
-- If a `@civitai/*` bump is ever refused by pnpm's `minimumReleaseAge` freshness
-  gate at install time, add a `pnpm-workspace.yaml` with `packages: ['.']` and a
-  `minimumReleaseAgeExclude` for the pinned versions. This repo has not needed
-  one — do not add it speculatively.
+- If a `@civitai/*` bump is refused by pnpm's `minimumReleaseAge` gate at install
+  time, the fix is almost always **to wait**: the gate is a 24h window measured
+  from the version's npm publish time, so it clears itself. `npm view <pkg> time`
+  gives the publish timestamp; add 24h for the moment CI goes green on its own.
+  A `minimumReleaseAgeExclude` entry in `pnpm-workspace.yaml` is the last resort
+  for when the wait is genuinely not affordable — it was used once, for
+  `@civitai/sdk@0.2.0`, and removed again once the window closed. 🔴 **Such an
+  entry expires on the CLOCK, not on a version bump** — the moment the 24h passes
+  it stops doing anything, and a stale one silently weakens the next reader's
+  assumptions about what the gate is still covering. Pin the exact `name@version`
+  if you add one; a bare package name exempts every future release forever.
 - `.env.production` bakes the allowed parent origins into the bundle at build
   time. Wrong value = the transport drops every host message and the iframe
   renders blank.
