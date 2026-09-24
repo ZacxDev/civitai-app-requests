@@ -1,32 +1,8 @@
 # pnpm settings. (pnpm 11 reads settings from here, camelCase; the `pnpm` field
 # in package.json is no longer read.)
 
-# 🔴 A DELIBERATE, NARROW EXEMPTION FROM A SUPPLY-CHAIN CONTROL. READ BEFORE EXTENDING.
-#
-# pnpm 11 enforces a `minimumReleaseAge` (24h by default): a lockfile entry for a
-# package published within that window is REFUSED. That control exists to blunt
-# third-party supply-chain attacks — a compromised maintainer account publishing a
-# malicious version — by giving the ecosystem time to detect and yank it.
-#
-# `@civitai/sdk@0.2.0` is FIRST-PARTY: it is published from this org's own
-# `civitai-app-starters` monorepo, and 0.2.0 specifically was published by hand
-# because npm OIDC trusted publishing cannot create a package that does not exist
-# yet. The threat the waiting period guards against — someone else's compromised
-# release — does not apply to a version we cut ourselves. Operator decision
-# 2026-09-23, taken with "just wait ~2h for the window to close" on the table.
-#
-# 🔴 IT IS PINNED TO THE EXACT VERSION ON PURPOSE. A bare `@civitai/sdk` would
-# exempt EVERY FUTURE RELEASE of the package, forever and silently — including one
-# cut by someone else, or by a compromised token. Measured: with `@civitai/sdk@0.2.1`
-# pinned instead, 0.2.0 still fails, so the version is load-bearing and this is not
-# a blanket name match.
-#
-# 🔴 THE POLICY IS NOT DISABLED AND MUST NOT BE. It still runs and still verified
-# all 185 lockfile entries in the run that made this necessary; exactly one is
-# exempt. Do NOT "fix" a future violation by setting `minimumReleaseAge: 0` or by
-# dropping the version pin — that removes the protection for every dependency.
-#
-# REMOVE THIS ENTRY once `@civitai/sdk` moves past 0.2.0. It is then dead config
-# that silently weakens the next reader's assumptions.
-minimumReleaseAgeExclude:
-  - "@civitai/sdk@0.2.0"
+# No settings are set here. pnpm 11's supply-chain defaults — notably the 24h
+# `minimumReleaseAge` — apply unmodified, with no exemptions. If you need to add a
+# `minimumReleaseAgeExclude` for a freshly published first-party version, prefer
+# waiting out the window: the entry is inert the moment the window closes and then
+# silently weakens the next reader's assumptions.
