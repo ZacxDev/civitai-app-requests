@@ -162,27 +162,31 @@ export const Badge = forwardRef<HTMLSpanElement, BadgeProps>(function Badge({ co
  * dropped — the sort switcher stretches across the toolbar's second row on
  * narrow layouts, a decision `src/layout.ts` makes and this must not ignore.
  *
- * 🔴 `mode` DEFAULTS TO `'tabs'` HERE, WHICH IS NOT THE PACK'S DEFAULT. The pack
- * defaults to `'toggle'` (`role="radiogroup"`); the previous pack rendered
- * `role="tablist"`, and the board's suites assert a tablist with a selected tab.
- * A port should not quietly change the accessibility semantics a screen-reader
- * user hears, so the existing behaviour is preserved and the divergence is
- * stated here rather than absorbed silently.
+ * 🔴 THE SORT SWITCHER IS A `radiogroup`, NOT A `tablist`, AND THAT IS A
+ * DELIBERATE CHANGE FROM WHAT THIS APP SHIPPED BEFORE. The previous pack
+ * rendered `role="tablist"` with `role="tab"` segments. That is the wrong
+ * pattern here: a tab controls a PANEL via `aria-controls`, and this control
+ * has no panels — it picks a value and the one list below it re-sorts. A
+ * screen-reader user was being promised a tabbed interface that does not exist.
  *
- * Worth revisiting deliberately and separately: for a panel-less value switch
- * the pack's `'toggle'`/radiogroup is arguably the better ARIA pattern, and its
- * own docs say so. That is a UX change, not a transport change.
+ * The components pack's default `mode="toggle"` is the WAI-ARIA radio-group
+ * pattern (`role="radiogroup"` + `aria-checked` segments), which is what a
+ * panel-less value switch should be, and the pack's own docs say so. Adopting
+ * the default is therefore the fix, not the compatibility risk — so `mode` is
+ * simply passed through and the pack decides.
+ *
+ * Operator decision 2026-09-23, made with the alternative (pin `tabs`, keep the
+ * old semantics, revisit later) on the table.
  */
 export interface SegmentedControlProps extends PackSegmentedControlProps {
   fullWidth?: boolean;
 }
 
 export const SegmentedControl = forwardRef<HTMLDivElement, SegmentedControlProps>(
-  function SegmentedControl({ fullWidth, mode = 'tabs', style, ...rest }, ref) {
+  function SegmentedControl({ fullWidth, style, ...rest }, ref) {
     return (
       <PackSegmentedControl
         ref={ref}
-        mode={mode}
         style={{ ...(fullWidth ? { display: 'flex', width: '100%' } : {}), ...style }}
         {...rest}
       />

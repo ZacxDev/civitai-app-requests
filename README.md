@@ -155,7 +155,7 @@ rather than the board.
 
 ### Known gaps on this transport
 
-Three things the previous bridge package provided have no equivalent in
+Two things the previous bridge package provided have no equivalent in
 `@civitai/sdk`, and each is handled explicitly rather than silently:
 
 - **Analytics is a no-op.** `useBlockAnalytics` is a local shim
@@ -167,11 +167,18 @@ Three things the previous bridge package provided have no equivalent in
   modal only as a Lit custom element, which under jsdom leaves its children in
   the document while closed and exposes no `role="dialog"`. Both matter for a
   modal holding the composer, so `src/platform/ui.tsx` implements one.
-- **`SegmentedControl` is pinned to `mode="tabs"`.** The pack defaults to
-  `toggle` (`role="radiogroup"`); the previous pack rendered `role="tablist"`,
-  which the suites assert. The existing a11y semantics are preserved so the port
-  does not quietly change what a screen-reader user hears. Worth revisiting on
-  its own merits — `toggle` is arguably the better pattern for a value switch.
+
+Separately, one **deliberate behaviour change** rode along with the port:
+
+- **The sort switcher is now a `radiogroup`, not a `tablist`.** The previous pack
+  rendered `role="tablist"` with `role="tab"` segments. That was the wrong
+  pattern: a tab controls a panel via `aria-controls`, and this control has never
+  had one — it picks a value and the single list below it re-sorts, so
+  screen-reader users were promised a tabbed interface that does not exist. It
+  now uses the components pack's default `toggle` mode, which is the WAI-ARIA
+  radio-group pattern. The assertion in `App.test.tsx` was **inverted rather than
+  relaxed**, and additionally pins that the element does not still claim to be a
+  tab set.
 
 ## Test + build
 
