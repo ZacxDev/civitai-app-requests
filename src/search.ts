@@ -10,7 +10,7 @@
 // Pure + framework-free so it is covered by fast node unit tests with literal
 // expected values.
 
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from './platform/index.js';
 
 /** Lowercase, strip punctuation to spaces, collapse runs. Total. */
 function normalize(s: string): string {

@@ -5,7 +5,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from './platform/index.js';
 
 import { TRUST_GATE_MESSAGE } from './errors.js';
 import { OWNER_USER_ID } from './moderation.js';
@@ -34,7 +34,7 @@ const h = vi.hoisted(() => ({
   track: vi.fn(),
 }));
 
-vi.mock('@civitai/blocks-react', async (importOriginal) => ({
+vi.mock('./platform/index.js', async (importOriginal) => ({
   // 🔴 REAL MODULE FIRST, overrides after. The SDK hook surface below is still
   // stubbed; what the spread buys is that `useBlockBreakpoint` is the REAL
   // hook. jsdom has no `ResizeObserver`, so it stays `{ tier: 'base',
@@ -43,13 +43,12 @@ vi.mock('@civitai/blocks-react', async (importOriginal) => ({
   // 0.3.3 tree, and they do it against the real hook rather than a stub that
   // could drift from it. The width-tier behaviour is exercised in
   // src/responsive.test.tsx, which sets an observed width explicitly.
-  ...(await importOriginal<typeof import('@civitai/blocks-react')>()),
+  ...(await importOriginal<typeof import('./platform/index.js')>()),
   useBlockContext: () => h.ctx,
   useSharedStorage: () => h.shared,
   useRequestSignIn: () => ({ requestSignIn: h.requestSignIn }),
   useBlockAnalytics: () => ({ track: h.track }),
   useBlockResize: () => {},
-  getTransport: () => ({}),
 }));
 
 // Import App AFTER the mock is registered.
@@ -117,8 +116,15 @@ async function openRowMenu(user: ReturnType<typeof userEvent.setup>, row: HTMLEl
   return within(row).findByTestId('row-menu');
 }
 
+/**
+ * The sort segments.
+ *
+ * `radio`, not `tab`: the sort switcher is a panel-less value switch, so it is a
+ * `radiogroup` (see `src/platform/ui.tsx`). A tab promises an `aria-controls`
+ * panel this control has never had.
+ */
 function tabs() {
-  return within(screen.getByTestId('sort-control')).getAllByRole('tab');
+  return within(screen.getByTestId('sort-control')).getAllByRole('radio');
 }
 
 beforeEach(() => {
@@ -175,7 +181,20 @@ describe('board rendering', () => {
     );
   });
 
-  it('the sort control is an accessible tablist with Top selected by default', async () => {
+  /**
+   * 🔴 THIS ASSERTION WAS INVERTED, NOT RELAXED, AND THE OLD ONE WAS WRONG ABOUT
+   * THE DESIGN. Until the `@civitai/sdk` port this read "an accessible tablist"
+   * and pinned `role="tablist"` / `role="tab"` / `aria-selected`, because that is
+   * what the old UI pack happened to render. But a tab controls a PANEL through
+   * `aria-controls`, and the sort switcher has never had one — it picks a value
+   * and the single list below it re-sorts. The old test therefore pinned a
+   * promise to screen-reader users that the UI did not keep.
+   *
+   * The control is now the WAI-ARIA radio-group pattern, which is what a
+   * panel-less value switch should be. Operator decision 2026-09-23, taken with
+   * "keep the old semantics and revisit separately" explicitly on the table.
+   */
+  it('the sort control is an accessible radiogroup with Top selected by default', async () => {
     h.shared.list.mockResolvedValue({
       items: [makeItem({ key: 's1', title: 'Sortable' })],
       nextCursor: undefined,
@@ -183,12 +202,20 @@ describe('board rendering', () => {
     render(<App />);
     await screen.findByText('Sortable');
 
-    const tablist = screen.getByTestId('sort-control');
-    expect(tablist).toHaveAttribute('role', 'tablist');
-    const all = within(tablist).getAllByRole('tab');
+    const group = screen.getByTestId('sort-control');
+    expect(group).toHaveAttribute('role', 'radiogroup');
+    // A radiogroup carries its own accessible name; without one the segments are
+    // announced with no indication of WHAT is being chosen.
+    expect(group).toHaveAccessibleName();
+    // 🔴 And it must NOT still claim to be a tab set — asserting the new role
+    // alone would pass on an element that carried both.
+    expect(group).not.toHaveAttribute('role', 'tablist');
+    expect(within(group).queryAllByRole('tab')).toHaveLength(0);
+
+    const all = within(group).getAllByRole('radio');
     expect(all).toHaveLength(2);
-    expect(all.find((t) => t.textContent === 'Top')!).toHaveAttribute('aria-selected', 'true');
-    expect(all.find((t) => t.textContent === 'Newest')!).toHaveAttribute('aria-selected', 'false');
+    expect(all.find((t) => t.textContent === 'Top')!).toHaveAttribute('aria-checked', 'true');
+    expect(all.find((t) => t.textContent === 'Newest')!).toHaveAttribute('aria-checked', 'false');
   });
 
   it('shows the empty state when there are no requests', async () => {

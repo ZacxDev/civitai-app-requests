@@ -134,10 +134,51 @@ pnpm install --frozen-lockfile
 pnpm run dev:harness   # http://localhost:5187 — SDK mock host, seeded shared board
 ```
 
-The harness plays the civitai host locally via the published SDK
-`createMockHost` (seeded with a small board). The `mock scenarios` panel can
-toggle anonymous / signed-in and force the next mutation to fail. Nothing is
-written to Civitai.
+The harness plays BOTH halves of the platform locally: a scripted host that
+completes the handshake, and an in-memory server behind a fake `fetch`, seeded
+with a small board (`src/platform/testing.ts`). Everything between the board and
+that `fetch` is the real shipping code. The `mock scenarios` panel can toggle
+anonymous / signed-in and force the next mutation to fail. Nothing is written to
+Civitai.
+
+## The platform seam
+
+This app runs on **`@civitai/sdk`**. It holds the block token the host mints and
+calls the public REST routes under `/api/v1/blocks/shared-storage/*` for its
+data; the host bridge is used only for things that are genuinely host UI
+(sign-in, iframe resize).
+
+Everything platform-shaped lives behind `src/platform/`, and it is the only
+directory that imports `@civitai/sdk`. The board's ~1,300 lines are written
+against those names, so changing transports again means changing that directory
+rather than the board.
+
+### Known gaps on this transport
+
+Two things the previous bridge package provided have no equivalent in
+`@civitai/sdk`, and each is handled explicitly rather than silently:
+
+- **Analytics is a no-op.** `useBlockAnalytics` is a local shim
+  (`src/platform/hooks.ts`). The SDK has no analytics surface and there is no
+  REST route for one, so the board's six `track()` events currently go nowhere
+  (they log in dev). The call sites are kept so that wiring them up later is a
+  change to one function, not to six places.
+- **`Modal` is implemented here, not imported.** The components pack ships a
+  modal only as a Lit custom element, which under jsdom leaves its children in
+  the document while closed and exposes no `role="dialog"`. Both matter for a
+  modal holding the composer, so `src/platform/ui.tsx` implements one.
+
+Separately, one **deliberate behaviour change** rode along with the port:
+
+- **The sort switcher is now a `radiogroup`, not a `tablist`.** The previous pack
+  rendered `role="tablist"` with `role="tab"` segments. That was the wrong
+  pattern: a tab controls a panel via `aria-controls`, and this control has never
+  had one — it picks a value and the single list below it re-sorts, so
+  screen-reader users were promised a tabbed interface that does not exist. It
+  now uses the components pack's default `toggle` mode, which is the WAI-ARIA
+  radio-group pattern. The assertion in `App.test.tsx` was **inverted rather than
+  relaxed**, and additionally pins that the element does not still claim to be a
+  tab set.
 
 ## Test + build
 
@@ -234,6 +275,7 @@ civitai app submit   # packages manifest + src + build config (platform rebuilds
 
 - Developer docs — [developer.civitai.com](https://developer.civitai.com)
 - Live app — [app-requests.civit.ai](https://app-requests.civit.ai)
-- SDK contract — [`@civitai/app-sdk`](https://www.npmjs.com/package/@civitai/app-sdk)
-- React hooks + UI pack — [`@civitai/blocks-react`](https://www.npmjs.com/package/@civitai/blocks-react)
+- SDK — [`@civitai/sdk`](https://www.npmjs.com/package/@civitai/sdk) (what this app runs on)
+- Design system — [`@civitai/components-react`](https://www.npmjs.com/package/@civitai/components-react)
+- Block message contract — [`@civitai/app-sdk`](https://www.npmjs.com/package/@civitai/app-sdk)
 - CLI — [`github.com/civitai/cli`](https://github.com/civitai/cli)

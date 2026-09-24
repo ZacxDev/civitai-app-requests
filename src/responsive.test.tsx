@@ -2,7 +2,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from './platform/index.js';
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
@@ -50,17 +50,16 @@ const h = vi.hoisted(() => ({
   track: vi.fn(),
 }));
 
-vi.mock('@civitai/blocks-react', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@civitai/blocks-react')>()),
+vi.mock('./platform/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./platform/index.js')>()),
   useBlockContext: () => h.ctx,
   useSharedStorage: () => h.shared,
   useRequestSignIn: () => ({ requestSignIn: h.requestSignIn }),
   useBlockAnalytics: () => ({ track: h.track }),
   useBlockResize: () => {},
-  getTransport: () => ({}),
 }));
 
-import { resolveBlockTier } from '@civitai/blocks-react';
+import { resolveBlockTier } from './platform/index.js';
 
 import { App } from './App.js';
 
@@ -445,8 +444,8 @@ describe('🔴 no column flex container has a row-shaped child', () => {
   }
 
   it('the pack’s <Stack> really is a column — the assumption is checked, not trusted', async () => {
-    const { BLOCKS_UI_STYLES } = await import('@civitai/blocks-react/ui');
-    const rule = /\[data-civitai-ui=['"]stack['"]\]\s*\{[^}]*\}/.exec(BLOCKS_UI_STYLES)?.[0] ?? '';
+    const { componentsCss } = await import('@civitai/components');
+    const rule = /\[data-civitai-ui=['"]stack['"]\]\s*\{[^}]*\}/.exec(componentsCss)?.[0] ?? '';
     expect(rule, 'no [data-civitai-ui=stack] rule found in the pack stylesheet').not.toBe('');
     expect(rule.replace(/\s+/g, ' ')).toMatch(/flex-direction:\s*column/);
   });

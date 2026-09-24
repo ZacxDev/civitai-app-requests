@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from './platform/index.js';
 
 import {
   authorLabel,

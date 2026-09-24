@@ -8,9 +8,9 @@ import { palette } from './brand.js';
  * ─────────────────────────────────────────────────────────────────────────────
  * 🔴 THE PRE-`ready` THEME SENTINEL — the defect this file pins.
  *
- * `useBlockContext()` returns the SDK's pre-init snapshot until `BLOCK_INIT`
+ * `useBlockContext()` reports the SDK's pre-init sentinel until the handshake
  * lands, and that snapshot hardcodes `theme: 'light'`
- * (`@civitai/blocks-react` → `dist/internal/transport.js`, `EMPTY_SNAPSHOT`).
+ * (`@civitai/sdk` → `core/transport.ts`, `EMPTY_SNAPSHOT`).
  * So before `ready`, `theme` is `'light'` for EVERY viewer — a sentinel, not a
  * signal, and indistinguishable from a host that really is light.
  *
@@ -49,7 +49,7 @@ const h = vi.hoisted(() => ({
   track: vi.fn(),
 }));
 
-vi.mock('@civitai/blocks-react', async (importOriginal) => ({
+vi.mock('./platform/index.js', async (importOriginal) => ({
   // 🔴 REAL MODULE FIRST, overrides after. The SDK hook surface below is still
   // stubbed; what the spread buys is that `useBlockBreakpoint` is the REAL
   // hook. jsdom has no `ResizeObserver`, so it stays `{ tier: 'base',
@@ -58,13 +58,12 @@ vi.mock('@civitai/blocks-react', async (importOriginal) => ({
   // 0.3.3 tree, and they do it against the real hook rather than a stub that
   // could drift from it. The width-tier behaviour is exercised in
   // src/responsive.test.tsx, which sets an observed width explicitly.
-  ...(await importOriginal<typeof import('@civitai/blocks-react')>()),
+  ...(await importOriginal<typeof import('./platform/index.js')>()),
   useBlockContext: () => h.ctx,
   useSharedStorage: () => h.shared,
   useRequestSignIn: () => ({ requestSignIn: h.requestSignIn }),
   useBlockAnalytics: () => ({ track: h.track }),
   useBlockResize: () => {},
-  getTransport: () => ({}),
 }));
 
 import { App } from './App.js';
