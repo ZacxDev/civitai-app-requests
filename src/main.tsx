@@ -21,13 +21,15 @@
 // calls), so this is defensive: it closes the gap before a routine dependency
 // bump silently opens it.
 //
-// 🔴 TEMPORARY SOURCE. This is the app's only remaining PRODUCTION import of
-// `@civitai/app-sdk` — the predecessor #21 ported this app off. It is here only
-// because `@civitai/sdk` does not publish a `./safe-storage` subpath yet
-// (civitai/civitai-app-starters#457 is still open). Move it when that lands:
-// taste.json → deferred → `safe-storage-from-the-successor-sdk` carries the
-// closing condition and the one-line check that closes it.
-import '@civitai/app-sdk/safe-storage';
+// Sourced from `@civitai/sdk` — the successor this app was ported onto in #21.
+// It was temporarily imported from the predecessor `@civitai/app-sdk` (PR #23)
+// only because the successor had not published a `./safe-storage` subpath yet;
+// `civitai/civitai-app-starters#457` added it and `@civitai/sdk@0.7.0` shipped it
+// (`npm view @civitai/sdk exports` now lists `./safe-storage`). The app therefore
+// has NO production import of `@civitai/app-sdk` left — the only remaining
+// reference is a test (`src/bootFragment.test.ts`), so the dependency stays but
+// nothing in the shipped graph reaches it.
+import '@civitai/sdk/safe-storage';
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
