@@ -1,8 +1,40 @@
 # pnpm settings. (pnpm 11 reads settings from here, camelCase; the `pnpm` field
 # in package.json is no longer read.)
 
-# No settings are set here. pnpm 11's supply-chain defaults — notably the 24h
-# `minimumReleaseAge` — apply unmodified, with no exemptions. If you need to add a
-# `minimumReleaseAgeExclude` for a freshly published first-party version, prefer
-# waiting out the window: the entry is inert the moment the window closes and then
-# silently weakens the next reader's assumptions.
+# pnpm 11's supply-chain defaults — notably the 24h `minimumReleaseAge` — apply
+# unmodified EXCEPT for the single exact-version entry below. The standing
+# preference is still to WAIT the window out rather than add one: an entry is inert
+# the moment its window closes and then silently weakens the next reader's
+# assumptions. This one was taken as a deliberate exception, not by default.
+#
+# 🔴 ONE ENTRY, ONE EXACT VERSION, WITH ITS OWN EXPIRY. The policy still RUNS — it
+# verifies every other package in the tree — and exactly one pinned version is
+# exempt. This is NOT `minimumReleaseAge: 0`, which would remove the protection
+# from every dependency forever, silently, for everyone after you.
+#
+# `@civitai/sdk@0.7.0` — added 2026-09-26T04:0xZ.
+#   WHY: `src/main.tsx`'s first import is `@civitai/sdk/safe-storage`, a subpath
+#   that exists ONLY at 0.7.0 (civitai/civitai-app-starters#457, released as
+#   338c329). App 0.4.2 cannot build without it.
+#   FIRST-PARTY: cut from this org's own monorepo, so the third-party-compromise
+#   threat the window guards against does not apply to this version.
+#   🔴 EXPIRY — THE REAL ONE, WHICH IS A CLOCK AND NOT AN EVENT:
+#   **2026-09-27T03:45:56Z.** AT THAT MOMENT THIS ENTRY BECOMES INERT AND SHOULD BE
+#   DELETED. Taken from pnpm's OWN error line, which prints both numbers it uses:
+#   "@civitai/sdk@0.7.0 was published at 2026-09-26T03:45:56.000Z, within the
+#   minimumReleaseAge cutoff (...)". ⚠ npm's registry metadata says 03:47:34.808Z —
+#   98s later — so the two sources disagree; pnpm's is the one that governs, because
+#   pnpm is what enforces the gate. Read the gate's own output, not the registry's.
+#   Do NOT write the expiry as "remove once @civitai/sdk moves past 0.7.0" — this
+#   repo has shipped that mistake before: such a condition can never fire if no
+#   later version is ever published, and one such block was already inert seven
+#   minutes BEFORE the commit that added it.
+#   VERIFIED NARROW, 2026-09-26: with this exact pin, `pnpm install
+#   --frozen-lockfile` reports "✓ Lockfile passes supply-chain policies (185 entries
+#   in 813ms)" — the policy RAN over all 185. Control: changing the pin to
+#   `@civitai/sdk@0.7.1` and re-installing fails with
+#   ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION naming 0.7.0, so the version is
+#   load-bearing and the exemption really is one version wide.
+
+minimumReleaseAgeExclude:
+  - '@civitai/sdk@0.7.0'
