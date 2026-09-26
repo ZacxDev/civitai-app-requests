@@ -41,12 +41,17 @@ import { describe, expect, it } from 'vitest';
  * `name`, then exactly `/safe-storage`.
  *
  * 🔴 Neither the package NOR the whole specifier is hardcoded, and that is the
- * point. The shim is imported from `@civitai/app-sdk` only because
- * `@civitai/sdk` — the package #21 ported this app onto — does not publish a
- * `./safe-storage` subpath yet (taste.json → deferred →
- * `safe-storage-from-the-successor-sdk`). A test that spelled the old package
- * would go red BY DESIGN on the day of that migration, which is a tripwire for
- * intended work, not a guard.
+ * point — a test that spells a package name goes red BY DESIGN the day that
+ * package changes, which is a tripwire for intended work, not a guard.
+ *
+ * That design has now been EXERCISED rather than merely intended. The shim was
+ * imported from `@civitai/app-sdk` while `@civitai/sdk` — the package #21 ported
+ * this app onto — had no `./safe-storage` subpath; `@civitai/sdk@0.7.0` published
+ * one and `src/main.tsx` moved to it, with NO edit to this file and all three
+ * assertions still green. The `taste.json` item that tracked it
+ * (`safe-storage-from-the-successor-sdk`) is CLOSED, not pending — do not read
+ * this file as evidence that a migration is still outstanding, and do not
+ * "restore" the predecessor import on its authority.
  *
  * It is a pattern and not a substring test so the obvious walk — point the
  * import at a local no-op file that spells the right words while installing
