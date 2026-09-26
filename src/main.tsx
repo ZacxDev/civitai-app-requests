@@ -1,3 +1,34 @@
+// 🔴 FIRST IMPORT, DELIBERATELY. Keep it above every other import in this file.
+//
+// This block renders in `<iframe sandbox="allow-scripts">` WITHOUT
+// `allow-same-origin` (the host adds that flag only for trusted tiers, and every
+// approved v1 block is `unverified`). At that opaque origin merely *reading*
+// `window.localStorage` throws `SecurityError` — so any dependency that touches
+// storage while its module body evaluates takes the whole app down before a
+// single pixel is painted, usually reported as some unrelated failure.
+//
+// This module installs a spec-shaped in-memory `Storage` over a
+// present-but-unusable one, as an import side effect. It is a no-op wherever
+// storage actually works and never invents storage where there is none.
+//
+// Order is the entire mechanism: ES imports are hoisted and evaluated
+// depth-first in source order, so no *statement* could ever run early enough —
+// only an earlier import can. `src/safe-storage-order.test.ts` fails if this
+// line stops being first.
+//
+// Today the board's own production graph has no module-scope storage touch
+// (`@civitai/sdk`'s only one is inside `createSignIn()`, which this app never
+// calls), so this is defensive: it closes the gap before a routine dependency
+// bump silently opens it.
+//
+// 🔴 TEMPORARY SOURCE. This is the app's only remaining PRODUCTION import of
+// `@civitai/app-sdk` — the predecessor #21 ported this app off. It is here only
+// because `@civitai/sdk` does not publish a `./safe-storage` subpath yet
+// (civitai/civitai-app-starters#457 is still open). Move it when that lands:
+// taste.json → deferred → `safe-storage-from-the-successor-sdk` carries the
+// closing condition and the one-line check that closes it.
+import '@civitai/app-sdk/safe-storage';
+
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
