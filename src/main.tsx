@@ -20,6 +20,13 @@
 // (`@civitai/sdk`'s only one is inside `createSignIn()`, which this app never
 // calls), so this is defensive: it closes the gap before a routine dependency
 // bump silently opens it.
+//
+// 🔴 TEMPORARY SOURCE. This is the app's only remaining PRODUCTION import of
+// `@civitai/app-sdk` — the predecessor #21 ported this app off. It is here only
+// because `@civitai/sdk` does not publish a `./safe-storage` subpath yet
+// (civitai/civitai-app-starters#457 is still open). Move it when that lands:
+// taste.json → deferred → `safe-storage-from-the-successor-sdk` carries the
+// closing condition and the one-line check that closes it.
 import '@civitai/app-sdk/safe-storage';
 
 import { StrictMode } from 'react';

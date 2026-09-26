@@ -6,26 +6,12 @@ import { describe, expect, it } from 'vitest';
  * 🔴 THE SAFE-STORAGE SHIM ONLY WORKS IF IT IS THE ENTRY MODULE'S *FIRST*
  * IMPORT.
  *
- * This block renders inside `<iframe sandbox="allow-scripts">` with no
- * `allow-same-origin` — the host adds that flag only for trusted tiers, and in
- * v1 every approved block is `unverified`. At that **opaque origin** there is no
- * origin to key web storage against, so reading `window.localStorage` does not
- * return an empty store: it throws `SecurityError`. Any dependency that touches
- * storage while its module body evaluates therefore takes the app down before
- * first paint, and libraries routinely mislabel the failure as something else.
- *
- * `@civitai/app-sdk/safe-storage` installs an in-memory `Storage` over a
- * present-but-unusable one, as an import side effect. ES module imports are
- * hoisted and evaluated depth-first in source order, which is why ORDER is the
- * whole mechanism: no *statement* in `main.tsx` can run before a sibling
- * import's module body, only an earlier import can. Demote the import one line
- * and the shim still installs — just possibly after the dependency that needed
- * it has already thrown.
- *
- * Nothing else in this repo defends that ordering. There is no linter and no
- * import-sorting formatter (the only CI steps are `pnpm test` and `pnpm build`),
- * so a reorder is a silent, one-line regression whose only symptom appears in a
- * real sandboxed iframe on civitai.com.
+ * WHY — opaque origin, `SecurityError` on a mere read, why source order is the
+ * entire mechanism, and why no linter here defends it — is documented ONCE, at
+ * the hazard site: the comment block above the import in `src/main.tsx`. That
+ * is the copy a person reordering imports actually has in front of them, so it
+ * is the copy that is kept. Read it before changing anything here; it is not
+ * restated in this file.
  *
  * 🔴 WHAT THIS GUARD DOES NOT DO. It is a **source-order** assertion, nothing
  * more. It does not prove the shim works, and it cannot: jsdom has no opaque
@@ -41,9 +27,64 @@ import { describe, expect, it } from 'vitest';
  * shape it expects is missing, rather than returning undefined — a guard that
  * starts passing vacuously once someone deletes the thing it inspects is worse
  * than no guard.
+ *
+ * An earlier revision also asserted the shim was imported *exactly once*.
+ * Deleted as inert: a duplicated side-effect import evaluates the module body
+ * ONCE — the ES module registry keys on the resolved specifier — so the state
+ * it forbade could not produce the hazard, and the first-import assertion below
+ * still holds over a duplicated source. Measured: two `import './side.mjs';`
+ * lines → 1 module body evaluation (node 24).
  */
 
-const SHIM = '@civitai/app-sdk/safe-storage';
+/**
+ * A BARE package specifier for the `safe-storage` subpath: `@scope/name` or
+ * `name`, then exactly `/safe-storage`.
+ *
+ * 🔴 Neither the package NOR the whole specifier is hardcoded, and that is the
+ * point. The shim is imported from `@civitai/app-sdk` only because
+ * `@civitai/sdk` — the package #21 ported this app onto — does not publish a
+ * `./safe-storage` subpath yet (taste.json → deferred →
+ * `safe-storage-from-the-successor-sdk`). A test that spelled the old package
+ * would go red BY DESIGN on the day of that migration, which is a tripwire for
+ * intended work, not a guard.
+ *
+ * It is a pattern and not a substring test so the obvious walk — point the
+ * import at a local no-op file that spells the right words while installing
+ * nothing — does not satisfy it. Checked, not assumed: `./safe-storage`,
+ * `../safe-storage`, `./safe-storage.js` and `/abs/safe-storage` are all
+ * rejected; `@civitai/app-sdk/safe-storage`, `@civitai/sdk/safe-storage` and
+ * `pkg/safe-storage` accepted.
+ *
+ * 🔴 It does NOT reject every such shape on its own. A bare-looking prefix that
+ * is not a real package — `src/safe-storage` — matches this pattern. What
+ * closes that is the runtime-dependency assertion below, which then demands
+ * `src` be in `package.json` dependencies. Neither half is sufficient alone.
+ */
+const SHIM_SPECIFIER = /^(?:@[^@./][^/]*\/[^/]+|[^@./][^/]*)\/safe-storage$/;
+
+/**
+ * The one `<package>/safe-storage` import in `specifiers`.
+ *
+ * THROWS when there is none, so nothing downstream can start passing vacuously
+ * once someone deletes the import outright, and throws on more than one so the
+ * "which package" question always has a single answer.
+ */
+function shimImport(specifiers: string[]): string {
+  const matches = specifiers.filter((specifier) => SHIM_SPECIFIER.test(specifier));
+  if (matches.length !== 1) {
+    throw new Error(
+      `src/main.tsx: expected exactly one '<package>/safe-storage' import, found ` +
+        `${matches.length} — imports are: ${specifiers.join(', ')}`,
+    );
+  }
+  return matches[0];
+}
+
+/** `@scope/name/safe-storage` → `@scope/name`; `name/safe-storage` → `name`. */
+function packageOf(specifier: string): string {
+  const segments = specifier.split('/');
+  return specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0];
+}
 
 function repoFile(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), 'utf8');
@@ -95,27 +136,35 @@ describe('safe-storage is installed first', () => {
 
   it('makes the shim the FIRST import of the entry module', () => {
     const specifiers = importSpecifiers(repoFile('./main.tsx'));
+    const shim = shimImport(specifiers);
     expect(
       specifiers[0],
-      `src/main.tsx must import '${SHIM}' BEFORE anything else — it has to run ` +
+      `src/main.tsx must import '${shim}' BEFORE anything else — it has to run ` +
         `before any dependency that touches localStorage while evaluating. ` +
         `Found imports in this order: ${specifiers.join(', ')}`,
-    ).toBe(SHIM);
+    ).toBe(shim);
   });
 
-  it('imports the shim exactly once', () => {
+  it('keeps the package the shim comes from a runtime dependency', () => {
+    // 🔴 The premise here is narrower than it looks, so it is stated at the
+    // scope it was actually established. What holds is npm's own semantics: the
+    // PRODUCTION entry module imports this package, so it belongs in
+    // `dependencies`, not `devDependencies`. Whether the Civitai platform
+    // builder prunes devDependencies — and would therefore ship a bundle with
+    // a missing module — is NOT observable from this repo and is NOT claimed.
+    // An earlier revision of this comment asserted that mechanism as
+    // established; it never was.
     const specifiers = importSpecifiers(repoFile('./main.tsx'));
-    expect(specifiers.filter((specifier) => specifier === SHIM)).toHaveLength(1);
-  });
-
-  it('keeps @civitai/app-sdk a runtime dependency, not a devDependency', () => {
-    // The entry module imports it, so it ships in the bundle. Demoting it to
-    // devDependencies would still build here and break the platform's builder.
+    const owner = packageOf(shimImport(specifiers));
     const pkg = JSON.parse(repoFile('../package.json')) as {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
     };
-    expect(Object.keys(pkg.dependencies ?? {})).toContain('@civitai/app-sdk');
-    expect(Object.keys(pkg.devDependencies ?? {})).not.toContain('@civitai/app-sdk');
+    expect(
+      Object.keys(pkg.dependencies ?? {}),
+      `src/main.tsx imports the safe-storage shim from '${owner}' in the ` +
+        `production entry module, so '${owner}' must be a runtime dependency`,
+    ).toContain(owner);
+    expect(Object.keys(pkg.devDependencies ?? {})).not.toContain(owner);
   });
 });
