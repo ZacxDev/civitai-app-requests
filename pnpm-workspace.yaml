@@ -17,8 +17,16 @@
 # add a single `minimumReleaseAgeExclude` entry pinned to the exact `name@version`; a
 # bare package name exempts every future release of it forever.
 #
-# Note which direction is the dangerous one: the gate is ON by DEFAULT, so the hazard
-# is SETTING the value, never leaving it unset. `minimumReleaseAge` appears nowhere in
-# this repo (`pnpm config get minimumReleaseAge` → `undefined`) and the 24h window
-# still enforces — that is exactly why #24 needed an exclude at all. So deleting the
-# key is safe and is the current state; writing `0` into it is the irreversible part.
+# The hazard is SETTING the value, not leaving it unset: the 1440-minute (24h) default
+# is built in. `minimumReleaseAge` is not SET anywhere here (nor in `package.json` or
+# `~/.npmrc`) and the window still enforces — which is why #24 needed an exclude.
+#
+# ⚠ Do not generalise that to "deleting the key is always safe". Per
+# pnpm.io/settings/dependency-resolution, `minimumReleaseAgeStrict` is true by default
+# ONLY when `minimumReleaseAge` is set explicitly; the built-in default is NON-strict,
+# so fresh resolution can fall back to a non-compliant version instead of failing.
+# What this repo relies on is `--frozen-lockfile`, where verification fails hard
+# regardless of strictness — MEASURED on pnpm 11.25.0: with `minimumReleaseAge: 100000`
+# and `minimumReleaseAgeStrict: false` both set, `pnpm install --frozen-lockfile` still
+# exits 1 (ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION, naming `@civitai/sdk@0.7.0`).
+# Writing `0` stays the one unambiguously destructive edit.
