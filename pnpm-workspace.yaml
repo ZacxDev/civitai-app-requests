@@ -17,8 +17,20 @@
 # add a single `minimumReleaseAgeExclude` entry pinned to the exact `name@version`; a
 # bare package name exempts every future release of it forever.
 #
-# Note which direction is the dangerous one: the gate is ON by DEFAULT, so the hazard
-# is SETTING the value, never leaving it unset. `minimumReleaseAge` appears nowhere in
-# this repo (`pnpm config get minimumReleaseAge` → `undefined`) and the 24h window
-# still enforces — that is exactly why #24 needed an exclude at all. So deleting the
-# key is safe and is the current state; writing `0` into it is the irreversible part.
+# Note which direction is the dangerous one: the 1440-minute (24h) default is built
+# in, so the hazard is SETTING the value, not leaving it unset. `minimumReleaseAge` is
+# not SET anywhere in this repo — absent from this file, `package.json` and `~/.npmrc`;
+# `pnpm config get minimumReleaseAge` prints `undefined` on pnpm 11.25.0 with the cwd
+# inside the repo — and the window still enforced on `pnpm install --frozen-lockfile`,
+# which is why #24 needed an exclude at all.
+#
+# ⚠ One nuance, because the simple story is wrong in one direction: per
+# pnpm.io/settings/dependency-resolution, `minimumReleaseAgeStrict` defaults to true
+# only when `minimumReleaseAge` is set EXPLICITLY — the built-in 1440 default is
+# NON-strict, meaning fresh resolution may fall back to a non-compliant version rather
+# than fail. The hard failure we rely on is the `--frozen-lockfile` path: the lockfile
+# pins one exact version, so a violating entry has nothing to fall back to. So "unset
+# is safe" holds for THIS repo's CI, but do not generalise it — and note that deleting
+# an explicitly-set `minimumReleaseAge` silently flips strict from true to false,
+# keeping the window while dropping the hard failure. Writing `0` remains the one
+# unambiguously destructive edit.
