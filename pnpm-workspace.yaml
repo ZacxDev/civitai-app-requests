@@ -17,29 +17,16 @@
 # add a single `minimumReleaseAgeExclude` entry pinned to the exact `name@version`; a
 # bare package name exempts every future release of it forever.
 #
-# Note which direction is the dangerous one: the 1440-minute (24h) default is built
-# in, so the hazard is SETTING the value, not leaving it unset. `minimumReleaseAge` is
-# not SET anywhere in this repo — absent from this file, `package.json` and `~/.npmrc`;
-# `pnpm config get minimumReleaseAge` prints `undefined` on pnpm 11.25.0 with the cwd
-# inside the repo — and the window still enforced on `pnpm install --frozen-lockfile`,
-# which is why #24 needed an exclude at all.
+# The hazard is SETTING the value, not leaving it unset: the 1440-minute (24h) default
+# is built in. `minimumReleaseAge` is not SET anywhere here (nor in `package.json` or
+# `~/.npmrc`) and the window still enforces — which is why #24 needed an exclude.
 #
-# ⚠ One nuance, because the simple story is wrong in one direction: per
-# pnpm.io/settings/dependency-resolution, `minimumReleaseAgeStrict` defaults to true
-# only when `minimumReleaseAge` is set EXPLICITLY — the built-in 1440 default is
-# NON-strict, meaning fresh resolution may fall back to a non-compliant version rather
-# than fail. The hard failure we rely on is the `--frozen-lockfile` path: the lockfile
-# pins one exact version, so a violating entry has nothing to fall back to.
-#   MEASURED, not inferred — strict does NOT govern lockfile verification. On pnpm
-#   11.25.0, with `minimumReleaseAge: 100000` AND `minimumReleaseAgeStrict: false` both
-#   set explicitly, `pnpm install --frozen-lockfile` still exits 1 with
-#   "✗ Lockfile failed supply-chain policy check (185 entries)" /
-#   ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION naming `@civitai/sdk@0.7.0`. So
-#   `minimumReleaseAgeStrict` relaxes RESOLUTION fallback only; lockfile verification
-#   fails hard either way. (The earlier control that set only `minimumReleaseAge`
-#   proved less than it looked: setting it explicitly makes strict default TRUE, so it
-#   never tested the non-strict path.)
-# So "unset is safe" holds for THIS repo's CI, but do not generalise it — and note that
-# deleting an explicitly-set `minimumReleaseAge` silently flips strict from true to
-# false, keeping the window while dropping the hard failure on fresh resolution.
-# Writing `0` remains the one unambiguously destructive edit.
+# ⚠ Do not generalise that to "deleting the key is always safe". Per
+# pnpm.io/settings/dependency-resolution, `minimumReleaseAgeStrict` is true by default
+# ONLY when `minimumReleaseAge` is set explicitly; the built-in default is NON-strict,
+# so fresh resolution can fall back to a non-compliant version instead of failing.
+# What this repo relies on is `--frozen-lockfile`, where verification fails hard
+# regardless of strictness — MEASURED on pnpm 11.25.0: with `minimumReleaseAge: 100000`
+# and `minimumReleaseAgeStrict: false` both set, `pnpm install --frozen-lockfile` still
+# exits 1 (ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION, naming `@civitai/sdk@0.7.0`).
+# Writing `0` stays the one unambiguously destructive edit.
