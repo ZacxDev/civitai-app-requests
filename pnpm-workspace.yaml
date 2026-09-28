@@ -29,8 +29,17 @@
 # only when `minimumReleaseAge` is set EXPLICITLY — the built-in 1440 default is
 # NON-strict, meaning fresh resolution may fall back to a non-compliant version rather
 # than fail. The hard failure we rely on is the `--frozen-lockfile` path: the lockfile
-# pins one exact version, so a violating entry has nothing to fall back to. So "unset
-# is safe" holds for THIS repo's CI, but do not generalise it — and note that deleting
-# an explicitly-set `minimumReleaseAge` silently flips strict from true to false,
-# keeping the window while dropping the hard failure. Writing `0` remains the one
-# unambiguously destructive edit.
+# pins one exact version, so a violating entry has nothing to fall back to.
+#   MEASURED, not inferred — strict does NOT govern lockfile verification. On pnpm
+#   11.25.0, with `minimumReleaseAge: 100000` AND `minimumReleaseAgeStrict: false` both
+#   set explicitly, `pnpm install --frozen-lockfile` still exits 1 with
+#   "✗ Lockfile failed supply-chain policy check (185 entries)" /
+#   ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION naming `@civitai/sdk@0.7.0`. So
+#   `minimumReleaseAgeStrict` relaxes RESOLUTION fallback only; lockfile verification
+#   fails hard either way. (The earlier control that set only `minimumReleaseAge`
+#   proved less than it looked: setting it explicitly makes strict default TRUE, so it
+#   never tested the non-strict path.)
+# So "unset is safe" holds for THIS repo's CI, but do not generalise it — and note that
+# deleting an explicitly-set `minimumReleaseAge` silently flips strict from true to
+# false, keeping the window while dropping the hard failure on fresh resolution.
+# Writing `0` remains the one unambiguously destructive edit.
