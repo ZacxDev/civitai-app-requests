@@ -170,8 +170,9 @@ file, the incident they exist to prevent.
   from the version's npm publish time, so it clears itself. `npm view <pkg> time`
   gives the publish timestamp; add 24h for the moment CI goes green on its own.
   A `minimumReleaseAgeExclude` entry in `pnpm-workspace.yaml` is the last resort
-  for when the wait is genuinely not affordable — it was used once, for
-  `@civitai/sdk@0.2.0`, and removed again once the window closed. 🔴 **Such an
+  for when the wait is genuinely not affordable — it has been used twice
+  (`@civitai/sdk@0.2.0` in #21, `@civitai/sdk@0.7.0` in #24) and deleted both
+  times once the window closed (#22, #25). 🔴 **Such an
   entry expires on the CLOCK, not on a version bump** — the moment the 24h passes
   it stops doing anything, and a stale one silently weakens the next reader's
   assumptions about what the gate is still covering. Pin the exact `name@version`
