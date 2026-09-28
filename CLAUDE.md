@@ -171,12 +171,14 @@ file, the incident they exist to prevent.
   gives the publish timestamp; add 24h for the moment CI goes green on its own.
   A `minimumReleaseAgeExclude` entry in `pnpm-workspace.yaml` is the last resort
   for when the wait is genuinely not affordable — it has been used twice
-  (`@civitai/sdk@0.2.0` in #21, `@civitai/sdk@0.7.0` in #24) and deleted both
-  times once the window closed (#22, #25). 🔴 **Such an
-  entry expires on the CLOCK, not on a version bump** — the moment the 24h passes
-  it stops doing anything, and a stale one silently weakens the next reader's
-  assumptions about what the gate is still covering. Pin the exact `name@version`
-  if you add one; a bare package name exempts every future release forever.
+  (`@civitai/sdk@0.2.0` in #21, `@civitai/sdk@0.7.0` in #24) and deleted both times
+  once the window closed (#22, #25). 🔴 **Such an entry expires on the CLOCK, not on
+  a version bump** — the moment the 24h passes it stops doing anything, and a stale
+  one silently weakens the next reader's assumptions about what the gate is still
+  covering. Pin the exact `name@version` if you add one; a bare package name exempts
+  every future release forever. 🔴 **And never reach for `minimumReleaseAge: 0`** —
+  that disables the gate for every dependency, permanently and silently, which is a
+  far worse trade than either waiting or pinning one version.
 - `.env.production` bakes the allowed parent origins into the bundle at build
   time. Wrong value = the transport drops every host message and the iframe
   renders blank.
