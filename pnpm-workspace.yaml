@@ -4,10 +4,10 @@
 # No settings are set here. pnpm 11's supply-chain defaults — notably the 24h
 # `minimumReleaseAge` — apply unmodified, with no exemptions.
 #
-# A `minimumReleaseAgeExclude` has been added twice (`@civitai/sdk@0.2.0` in #21,
-# `@civitai/sdk@0.7.0` in #24) and deleted twice (#22, #25) — both times because the
-# window closed and the entry stopped doing anything. Prefer waiting the window out
-# over adding a third: such an entry expires on the CLOCK, not on a version bump, and
+# A `minimumReleaseAgeExclude` has been added three times (`@civitai/sdk@0.2.0` in #21,
+# `@civitai/sdk@0.7.0` in #24, `@civitai/sdk@0.14.0` in #28) and deleted each time
+# (#22, #25, and the follow-up to #28) — every time because the window closed and the entry stopped doing anything. Prefer waiting the window out
+# over adding another: such an entry expires on the CLOCK, not on a version bump, and
 # once inert it silently weakens the next reader's assumptions about what the gate
 # still covers.
 #
@@ -31,9 +31,3 @@
 # exits 1 (ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION, naming `@civitai/sdk@0.7.0`).
 # Writing `0` stays the one unambiguously destructive edit.
 
-# ⏳ TEMPORARY — the third exclude (document-store port). `@civitai/sdk@0.14.0` is the
-# first release carrying the document-store client this app now runs on; it was
-# published 2026-10-15T06:02:36Z, so the 24h window closes 2026-10-16T06:02:36Z.
-# After that instant this entry does nothing: DELETE IT (as #22 and #25 did).
-minimumReleaseAgeExclude:
-  - '@civitai/sdk@0.14.0'
