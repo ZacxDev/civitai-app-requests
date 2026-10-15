@@ -5,10 +5,9 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SharedListItem } from './platform/index.js';
+import type { RequestItem } from './platform/index.js';
 
 import { TRUST_GATE_MESSAGE } from './errors.js';
-import { OWNER_USER_ID } from './moderation.js';
 
 // ---- Mock the SDK hook surface. The UI pack (`/ui`) is left REAL — those are
 // pure presentational components that render fine in jsdom. ----
@@ -45,7 +44,7 @@ vi.mock('./platform/index.js', async (importOriginal) => ({
   // src/responsive.test.tsx, which sets an observed width explicitly.
   ...(await importOriginal<typeof import('./platform/index.js')>()),
   useBlockContext: () => h.ctx,
-  useSharedStorage: () => h.shared,
+  useRequestStore: () => h.shared,
   useRequestSignIn: () => ({ requestSignIn: h.requestSignIn }),
   useBlockAnalytics: () => ({ track: h.track }),
   useBlockResize: () => {},
@@ -72,23 +71,21 @@ function readIndexCss(): string {
 }
 
 let keySeq = 0;
-function makeItem(
-  o: Partial<SharedListItem> & { title?: string; body?: string; data?: unknown },
-): SharedListItem {
+function makeItem(o: Partial<RequestItem> & { title?: string; body?: string }): RequestItem {
   keySeq += 1;
-  const { title, body, data, ...rest } = o;
+  const { title, body, ...rest } = o;
   return {
     key: o.key ?? `k${keySeq}`,
-    authorUserId: 4021,
+    own: false,
     value: {
       title: title ?? `Idea ${keySeq}`,
       ...(body !== undefined ? { body } : {}),
-      ...(data !== undefined ? { data } : {}),
     },
     count: 0,
     createdAt: new Date(`2026-05-${String((keySeq % 27) + 1).padStart(2, '0')}T00:00:00Z`),
     updatedAt: new Date('2026-05-01T00:00:00Z'),
     viewerVoted: false,
+    version: 1,
     ...rest,
   };
 }
@@ -134,11 +131,17 @@ beforeEach(() => {
   h.ctx.viewer = { id: 7777, username: 'dev' };
   h.ctx.theme = 'dark';
   h.shared.list.mockResolvedValue({ items: [], nextCursor: undefined });
-  h.shared.append.mockResolvedValue({ key: 'new-key' });
-  h.shared.update.mockResolvedValue(undefined);
+  // The store answers a create / an edit with the stored document.
+  h.shared.append.mockImplementation((value: { title: string; body?: string }) =>
+    Promise.resolve(makeItem({ key: 'new-key', own: true, ...value })),
+  );
+  h.shared.update.mockImplementation(
+    (key: string, value: { title: string; body?: string }, opts: { ifVersion: number }) =>
+      Promise.resolve(makeItem({ key, own: true, version: opts.ifVersion + 1, ...value })),
+  );
   h.shared.vote.mockResolvedValue(1);
   h.shared.unvote.mockResolvedValue(0);
-  h.shared.withdraw.mockResolvedValue({ ok: true, deleted: true });
+  h.shared.withdraw.mockResolvedValue({ deleted: true });
   h.shared.report.mockResolvedValue(undefined);
 });
 
@@ -160,6 +163,24 @@ describe('board rendering', () => {
     expect(within(rows[0]).getByText('Older idea')).toBeInTheDocument();
     expect(within(rows[1]).getByText('Newer idea')).toBeInTheDocument();
     expect(screen.getByTestId('request-count')).toHaveTextContent('2');
+  });
+
+  it('asks the STORE for each order — Top is `top`, and Newest is a fresh query', async () => {
+    // Ranking is server-side now: the board must ask for the order, not page
+    // newest-first and rank what it happened to load.
+    const user = userEvent.setup();
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'r1', title: 'Ranked row', count: 2 })],
+      nextCursor: undefined,
+    });
+    render(<App />);
+    await screen.findByText('Ranked row');
+    expect(h.shared.list).toHaveBeenCalledTimes(1);
+    expect(h.shared.list).toHaveBeenLastCalledWith({ sort: 'top', limit: 25 });
+
+    await user.click(tabs().find((t) => t.textContent === 'Newest')!);
+    await waitFor(() => expect(h.shared.list).toHaveBeenCalledTimes(2));
+    expect(h.shared.list).toHaveBeenLastCalledWith({ sort: 'newest', limit: 25 });
   });
 
   it('switching to Newest re-orders by recency', async () => {
@@ -233,59 +254,25 @@ describe('board rendering', () => {
     expect(screen.queryByTestId('submit-btn')).toBeNull();
   });
 
-  it('ranks ACROSS pages on cold boot, then stops at the horizon and says so', async () => {
-    // A board bigger than the 8-page scan horizon: every page yields a cursor.
-    // Page 3 holds the high-vote row, so a page-1-only ranking would miss it.
+  it('boots on ONE list round-trip and makes NO ranking claim, even on a larger board', async () => {
+    // 🔴 There is no background scan any more: the server's `-mark:vote` page 1
+    // IS the top of the board. So a board with more pages costs one call at
+    // boot, and — with no search active — there is no horizon to admit to.
     h.shared.list.mockImplementation((arg?: { cursor?: string }) => {
       const n = arg?.cursor ? Number(arg.cursor.replace('cur-', '')) : 0;
       return Promise.resolve({
-        items: [
-          makeItem({
-            key: `p${n}`,
-            title: n === 3 ? 'High vote deep page' : `Row page ${n}`,
-            count: n === 3 ? 50 : 1,
-          }),
-        ],
+        items: [makeItem({ key: `p${n}`, title: `Row page ${n}`, count: 1 })],
         nextCursor: `cur-${n + 1}`,
       });
     });
     render(<App />);
     await screen.findByText('Row page 0');
 
-    // The background scan pulls the deep page and re-ranks it to the top.
-    expect(await screen.findByText('High vote deep page')).toBeInTheDocument();
-    await waitFor(() =>
-      expect(within(screen.getAllByTestId('request-row')[0]).getByText('High vote deep page')).toBeInTheDocument(),
-    );
-
-    // 🔴 The horizon binds (a cursor survives the cap) → the board SAYS so.
-    const note = await screen.findByTestId('horizon-note');
-    expect(note).toHaveTextContent('Ranked across the first 9 requests — the board is larger.');
-  });
-
-  it('first paint costs exactly ONE list round-trip even though Top is the default', async () => {
-    // 🔴 The cold-boot cost of defaulting to a scanned order. Page 1 must reach
-    // the screen before the deep scan runs, or making Top the default would be a
-    // first-paint regression of up to nine sequential round-trips.
-    const page2 = deferred<{ items: SharedListItem[]; nextCursor?: string }>();
-    h.shared.list.mockImplementation((arg?: { cursor?: string }) => {
-      if (!arg?.cursor) {
-        return Promise.resolve({
-          items: [makeItem({ key: 'first', title: 'Painted first', count: 1 })],
-          nextCursor: 'cur-1',
-        });
-      }
-      return page2.promise;
-    });
-    render(<App />);
-
-    // Row is on screen while page 2 is still in flight.
-    expect(await screen.findByText('Painted first')).toBeInTheDocument();
-    expect(screen.queryByTestId('app-loading')).toBeNull();
-    expect(screen.getByTestId('scanning')).toBeInTheDocument();
-
-    page2.resolve({ items: [], nextCursor: undefined });
-    await waitFor(() => expect(screen.queryByTestId('scanning')).toBeNull());
+    expect(h.shared.list).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('horizon-note')).toBeNull();
+    // The old background-scan status is gone with the scan.
+    expect(screen.queryByTestId('scanning')).toBeNull();
+    expect(screen.queryByText(/Ranked across/)).toBeNull();
   });
 
   it('does not claim a partial ranking when the whole board fits', async () => {
@@ -311,14 +298,43 @@ describe('board rendering', () => {
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText('Row page 0');
-    await waitFor(() => expect(screen.queryByTestId('scanning')).toBeNull());
-    const afterScan = deepest; // the horizon: 8 scan pages past page 1
+    expect(deepest).toBe(0); // boot loaded page 1 only
 
     await user.click(screen.getByTestId('load-more'));
 
-    // Load more extends PAST the horizon by another scan window.
-    await waitFor(() => expect(deepest).toBeGreaterThan(afterScan));
-    expect(await screen.findByText(`Row page ${afterScan + 1}`)).toBeInTheDocument();
+    // Load more follows the cursor — in the SAME order it was issued for.
+    await waitFor(() => expect(deepest).toBe(8));
+    expect(await screen.findByText('Row page 1')).toBeInTheDocument();
+    expect(h.shared.list).toHaveBeenCalledWith({ sort: 'top', limit: 25, cursor: 'cur-1' });
+  });
+});
+
+describe('viewer changes', () => {
+  it('🔴 reloads the board when the viewer signs in, so own rows and votes are THEIRS', async () => {
+    // `own` and `viewerVoted` are the store's answers for the viewer who asked.
+    // Rows listed while signed out are "not yours" to everyone; keeping them
+    // after sign-in would hide the new viewer's edit/withdraw and lie about
+    // their votes.
+    h.ctx.viewer = null;
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'r1', title: 'Written by me', own: false })],
+      nextCursor: undefined,
+    });
+    const { rerender } = render(<App />);
+    await screen.findByText('Written by me');
+    expect(h.shared.list).toHaveBeenCalledTimes(1);
+
+    h.ctx.viewer = { id: 7777, username: 'dev' };
+    h.shared.list.mockResolvedValue({
+      items: [makeItem({ key: 'r1', title: 'Written by me', own: true, viewerVoted: true })],
+      nextCursor: undefined,
+    });
+    rerender(<App />);
+
+    await waitFor(() => expect(h.shared.list).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByTestId('vote-btn')).toHaveAttribute('aria-pressed', 'true'),
+    );
   });
 });
 
@@ -376,9 +392,9 @@ describe('0.3.1 fixes, end to end on the board', () => {
   const mixedBoard = () => ({
     items: [
       // The viewer's own row...
-      makeItem({ key: 'mine', title: 'My own request', count: 5, authorUserId: 7777 }),
+      makeItem({ key: 'mine', title: 'My own request', count: 5, own: true }),
       // ...and someone else's.
-      makeItem({ key: 'theirs', title: 'Their request', count: 3, authorUserId: 4021 }),
+      makeItem({ key: 'theirs', title: 'Their request', count: 3, own: false }),
     ],
     nextCursor: undefined,
   });
@@ -586,7 +602,6 @@ describe('search', () => {
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText('Row page 0');
-    await waitFor(() => expect(screen.queryByTestId('scanning')).toBeNull());
 
     await user.type(screen.getByTestId('search-input'), 'zzzzz');
 
@@ -626,19 +641,20 @@ describe('search', () => {
     h.shared.list.mockImplementation((arg?: { cursor?: string }) => {
       const n = arg?.cursor ? Number(arg.cursor.replace('cur-', '')) : 0;
       return Promise.resolve({
-        items: [makeItem({ key: `p${n}`, title: `Row page ${n}`, count: 1 })],
+        items: [0, 1, 2].map((i) =>
+          makeItem({ key: `p${n}-${i}`, title: `Row page ${n} item ${i}`, count: 1 }),
+        ),
         nextCursor: `cur-${n + 1}`,
       });
     });
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByText('Row page 0');
-    await waitFor(() => expect(screen.queryByTestId('scanning')).toBeNull());
+    await screen.findByText('Row page 0 item 0');
 
     await user.type(screen.getByTestId('search-input'), 'page');
     await waitFor(() =>
       expect(screen.getByTestId('horizon-note')).toHaveTextContent(
-        'Ranked and searched across the first 9 requests — the board is larger, so a match further down won\'t appear.',
+        'Searching the first 3 requests — the board is larger, so a match further down won\'t appear.',
       ),
     );
   });
@@ -847,9 +863,13 @@ describe('voting', () => {
 describe('edit own request', () => {
   it("edits the author's own row in place via update() — preserving key + votes", async () => {
     h.shared.list.mockResolvedValue({
-      items: [makeItem({ key: 'mine', title: 'Typo in titel', authorUserId: 7777, count: 12 })],
+      items: [makeItem({ key: 'mine', title: 'Typo in titel', own: true, count: 12 })],
       nextCursor: undefined,
     });
+    // The store answers with the stored document — votes and all.
+    h.shared.update.mockImplementationOnce((key: string, value: { title: string }) =>
+      Promise.resolve(makeItem({ key, own: true, count: 12, version: 2, ...value })),
+    );
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText('Typo in titel');
@@ -863,8 +883,14 @@ describe('edit own request', () => {
     await user.type(titleInput, 'Typo in title (fixed)');
     await user.click(screen.getByTestId('edit-save-btn'));
 
+    // Conditional on the version the board loaded, so a concurrent edit is
+    // refused rather than silently overwritten.
     await waitFor(() =>
-      expect(h.shared.update).toHaveBeenCalledWith('mine', { title: 'Typo in title (fixed)' }),
+      expect(h.shared.update).toHaveBeenCalledWith(
+        'mine',
+        { title: 'Typo in title (fixed)' },
+        { ifVersion: 1 },
+      ),
     );
     expect(h.shared.append).not.toHaveBeenCalled();
     expect(await screen.findByText('Typo in title (fixed)')).toBeInTheDocument();
@@ -873,7 +899,7 @@ describe('edit own request', () => {
 
   it("does not offer Edit on someone else's row", async () => {
     h.shared.list.mockResolvedValue({
-      items: [makeItem({ key: 'theirs', title: 'Not mine', authorUserId: 4021, count: 3 })],
+      items: [makeItem({ key: 'theirs', title: 'Not mine', own: false, count: 3 })],
       nextCursor: undefined,
     });
     const user = userEvent.setup();
@@ -890,8 +916,8 @@ describe('withdraw', () => {
   it("shows withdraw only on the viewer's own rows and removes after confirming", async () => {
     h.shared.list.mockResolvedValue({
       items: [
-        makeItem({ key: 'mine', title: 'My idea', authorUserId: 7777, count: 1 }),
-        makeItem({ key: 'theirs', title: 'Their idea', authorUserId: 4021, count: 1 }),
+        makeItem({ key: 'mine', title: 'My idea', own: true, count: 1 }),
+        makeItem({ key: 'theirs', title: 'Their idea', own: false, count: 1 }),
       ],
       nextCursor: undefined,
     });
@@ -921,7 +947,7 @@ describe('withdraw', () => {
 
   it('the confirm dialog names the vote count and Cancel aborts (no delete)', async () => {
     h.shared.list.mockResolvedValue({
-      items: [makeItem({ key: 'mine', title: 'My idea', authorUserId: 7777, count: 12 })],
+      items: [makeItem({ key: 'mine', title: 'My idea', own: true, count: 12 })],
       nextCursor: undefined,
     });
     const user = userEvent.setup();
@@ -941,7 +967,7 @@ describe('withdraw', () => {
 
   it('the confirm dialog singularizes a single vote', async () => {
     h.shared.list.mockResolvedValue({
-      items: [makeItem({ key: 'mine', title: 'My idea', authorUserId: 7777, count: 1 })],
+      items: [makeItem({ key: 'mine', title: 'My idea', own: true, count: 1 })],
       nextCursor: undefined,
     });
     const user = userEvent.setup();
@@ -958,7 +984,7 @@ describe('withdraw', () => {
 describe('moderation', () => {
   it('any signed-in viewer can report someone else\'s row, and the copy does not promise a hide', async () => {
     h.shared.list.mockResolvedValue({
-      items: [makeItem({ key: 'bad', title: 'Spammy row', authorUserId: 4021, count: 1 })],
+      items: [makeItem({ key: 'bad', title: 'Spammy row', own: false, count: 1 })],
       nextCursor: undefined,
     });
     const user = userEvent.setup();
@@ -974,88 +1000,24 @@ describe('moderation', () => {
     expect(screen.getByText('Spammy row')).toBeInTheDocument();
   });
 
-  it('offers the owner a HIDE (never a delete) and it appends a ledger entry', async () => {
-    h.ctx.viewer = { id: OWNER_USER_ID, username: 'owner' };
+  it('offers NO owner "hide" affordance to anyone — moderation is Civitai\'s', async () => {
+    // The owner-authored suppression ledger is gone with the legacy store: the
+    // document store exposes no author id to verify a ledger entry against and
+    // has no owner-written documents in phase 1. Hiding is a Civitai moderator
+    // action on a reported document now. Pinned so the menu cannot quietly
+    // regrow an affordance with nothing behind it.
+    h.ctx.viewer = { id: 8753561, username: 'owner' };
     h.shared.list.mockResolvedValue({
-      items: [makeItem({ key: 'bad', title: 'Spammy row', authorUserId: 4021, count: 1 })],
+      items: [makeItem({ key: 'bad', title: 'Spammy row', own: false, count: 1 })],
       nextCursor: undefined,
     });
     const user = userEvent.setup();
     render(<App />);
     await screen.findByText('Spammy row');
-
-    await openRowMenu(user, screen.getByTestId('request-row'));
-    const suppressItem = screen.getByTestId('suppress-btn');
-    expect(suppressItem).toHaveTextContent('Hide from board');
-    expect(suppressItem).not.toHaveTextContent(/delete/i);
-    await user.click(suppressItem);
-
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText(/not deleted/)).toBeInTheDocument();
-    await user.click(within(dialog).getByTestId('suppress-confirm-btn'));
-
-    await waitFor(() =>
-      expect(h.shared.append).toHaveBeenCalledWith({
-        title: 'Moderation record',
-        data: { kind: 'app-requests/suppression', v: 1, target: 'bad' },
-      }),
-    );
-  });
-
-  it('a NON-owner sees no hide affordance', async () => {
-    h.shared.list.mockResolvedValue({
-      items: [makeItem({ key: 'bad', title: 'Spammy row', authorUserId: 4021, count: 1 })],
-      nextCursor: undefined,
-    });
-    const user = userEvent.setup();
-    render(<App />);
-    await screen.findByText('Spammy row');
-    await openRowMenu(user, screen.getByTestId('request-row'));
+    const menu = await openRowMenu(user, screen.getByTestId('request-row'));
+    expect(within(menu).getByTestId('report-btn')).toBeInTheDocument();
     expect(screen.queryByTestId('suppress-btn')).toBeNull();
-  });
-
-  it('honours an owner ledger entry and never renders the ledger row itself', async () => {
-    h.shared.list.mockResolvedValue({
-      items: [
-        makeItem({ key: 'visible', title: 'Stays visible', count: 2 }),
-        makeItem({ key: 'hidden', title: 'Should be hidden', count: 9 }),
-        makeItem({
-          key: 'ledger',
-          title: 'Moderation record',
-          authorUserId: OWNER_USER_ID,
-          data: { kind: 'app-requests/suppression', v: 1, target: 'hidden' },
-        }),
-      ],
-      nextCursor: undefined,
-    });
-    render(<App />);
-    await screen.findByText('Stays visible');
-
-    expect(screen.queryByText('Should be hidden')).toBeNull();
-    expect(screen.queryByText('Moderation record')).toBeNull();
-    expect(screen.getAllByTestId('request-row')).toHaveLength(1);
-    expect(screen.getByTestId('request-count')).toHaveTextContent('1');
-  });
-
-  it('🔴 IGNORES a forged ledger entry from a non-owner', async () => {
-    h.shared.list.mockResolvedValue({
-      items: [
-        makeItem({ key: 'target', title: 'Cannot be forged away', count: 9 }),
-        makeItem({
-          key: 'forged',
-          title: 'Moderation record',
-          authorUserId: 4021, // NOT the owner
-          data: { kind: 'app-requests/suppression', v: 1, target: 'target' },
-        }),
-      ],
-      nextCursor: undefined,
-    });
-    render(<App />);
-    // The targeted row survives — the author check is the whole security boundary.
-    expect(await screen.findByText('Cannot be forged away')).toBeInTheDocument();
-    // The forged record is still never rendered AS a request.
-    expect(screen.queryByText('Moderation record')).toBeNull();
-    expect(screen.getAllByTestId('request-row')).toHaveLength(1);
+    expect(screen.queryByText(/Hide from board/)).toBeNull();
   });
 });
 
@@ -1066,12 +1028,12 @@ describe('malformed shared row', () => {
         makeItem({ key: 'good', title: 'Good row', count: 2 }),
         {
           key: 'bad',
-          authorUserId: 1,
+          own: false,
           value: {},
           count: 0,
           createdAt: '2026-01-01T00:00:00Z',
           updatedAt: '2026-01-01T00:00:00Z',
-        } as unknown as SharedListItem,
+        } as unknown as RequestItem,
       ],
       nextCursor: undefined,
     });

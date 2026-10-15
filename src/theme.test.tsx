@@ -13,7 +13,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SharedListItem } from './platform/index.js';
+import type { RequestItem } from './platform/index.js';
 
 import { palette } from './brand.js';
 import { DURATION } from './motion.js';
@@ -51,7 +51,7 @@ vi.mock('./platform/index.js', async (importOriginal) => ({
   // src/responsive.test.tsx, which sets an observed width explicitly.
   ...(await importOriginal<typeof import('./platform/index.js')>()),
   useBlockContext: () => h.ctx,
-  useSharedStorage: () => h.shared,
+  useRequestStore: () => h.shared,
   useRequestSignIn: () => ({ requestSignIn: h.requestSignIn }),
   useBlockAnalytics: () => ({ track: h.track }),
   useBlockResize: () => {},
@@ -59,16 +59,17 @@ vi.mock('./platform/index.js', async (importOriginal) => ({
 
 import { App } from './App.js';
 
-function item(o: Partial<SharedListItem> & { title: string }): SharedListItem {
+function item(o: Partial<RequestItem> & { title: string }): RequestItem {
   const { title, ...rest } = o;
   return {
     key: 'k1',
-    authorUserId: 4021,
+    own: false,
     value: { title },
     count: 3,
     createdAt: new Date('2026-05-01T00:00:00Z'),
     updatedAt: new Date('2026-05-01T00:00:00Z'),
     viewerVoted: false,
+    version: 1,
     ...rest,
   };
 }

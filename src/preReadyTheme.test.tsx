@@ -60,7 +60,7 @@ vi.mock('./platform/index.js', async (importOriginal) => ({
   // src/responsive.test.tsx, which sets an observed width explicitly.
   ...(await importOriginal<typeof import('./platform/index.js')>()),
   useBlockContext: () => h.ctx,
-  useSharedStorage: () => h.shared,
+  useRequestStore: () => h.shared,
   useRequestSignIn: () => ({ requestSignIn: h.requestSignIn }),
   useBlockAnalytics: () => ({ track: h.track }),
   useBlockResize: () => {},

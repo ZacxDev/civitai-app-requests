@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { SharedListItem } from './platform/index.js';
+import type { RequestItem } from './platform/index.js';
 
 import {
   filterRequests,
@@ -15,15 +15,16 @@ import {
   TITLE_BONUS,
 } from './search.js';
 
-function item(title: string, body?: string, key = title): SharedListItem {
+function item(title: string, body?: string, key = title): RequestItem {
   return {
     key,
-    authorUserId: 1,
+    own: false,
     value: body === undefined ? { title } : { title, body },
     count: 0,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-01T00:00:00Z'),
     viewerVoted: false,
+    version: 1,
   };
 }
 

@@ -9,7 +9,7 @@ import {
 } from 'react';
 
 // The platform seam. Everything the board needs from Civitai — the viewer, the
-// theme, the shared-storage data layer, the iframe conversation — comes through
+// theme, the document-store data layer, the iframe conversation — comes through
 // `./platform`, which is the only place that imports `@civitai/sdk`.
 import {
   useBlockAnalytics,
@@ -17,9 +17,9 @@ import {
   useBlockContext,
   useBlockResize,
   useRequestSignIn,
-  useSharedStorage,
-  type SharedAppendValue,
-  type SharedListItem,
+  useRequestStore,
+  type RequestItem,
+  type RequestValue,
 } from './platform/index.js';
 // The design system. These used to come from the blocks-react bridge package's
 // `/ui` pack;
@@ -41,12 +41,7 @@ import { Badge, Button, Group, Modal, SegmentedControl, Stack } from './platform
 
 import { paletteCssVars } from './brand.js';
 import { bootThemeGuess } from './bootTheme.js';
-import {
-  horizonModeFor,
-  horizonNote,
-  PAGE_SIZE,
-  TOP_SCAN_MAX_PAGES,
-} from './disclosure.js';
+import { horizonModeFor, horizonNote, LOAD_MORE_MAX_PAGES, PAGE_SIZE } from './disclosure.js';
 import { classifyWriteError } from './errors.js';
 import { RootBoundary } from './RootBoundary.js';
 import {
@@ -64,12 +59,6 @@ import {
 } from './format.js';
 import { boardLayout, type BoardLayout } from './layout.js';
 import { entryMotionProps, useReducedMotion } from './motion.js';
-import {
-  buildSuppressionEntry,
-  isOwner,
-  OWNER_USER_ID,
-  visibleRequests,
-} from './moderation.js';
 import { filterRequests } from './search.js';
 import {
   cardStyle,
@@ -91,8 +80,8 @@ import { VoteButton } from './components/VoteButton.js';
 /**
  * App Requests — a first-party Civitai App Block. A community voting board where
  * anyone posts an idea for a new app or feature and up-votes others'. Built on
- * the cross-user SHARED storage platform (`useSharedStorage`). No Buzz, no
- * generation.
+ * one shared collection of the App Blocks document store (`useRequestStore`).
+ * No Buzz, no generation.
  */
 export function App() {
   // One stylesheet now, not two. The board used to inject the `/ui` pack's
@@ -127,7 +116,7 @@ export function App() {
 
 function Board() {
   const { ready, viewer, theme } = useBlockContext();
-  const shared = useSharedStorage();
+  const store = useRequestStore();
   const { requestSignIn } = useRequestSignIn();
   const { track } = useBlockAnalytics();
   const toast = useToast();
@@ -150,11 +139,10 @@ function Board() {
    */
   const layout = boardLayout(useBlockBreakpoint(rootRef));
 
-  const viewerId = viewer?.id ?? null;
   const isAnon = ready && viewer == null;
-  const owner = isOwner(viewerId);
+  const viewerId = viewer?.id ?? null;
 
-  const [items, setItems] = useState<SharedListItem[]>([]);
+  const [items, setItems] = useState<RequestItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -162,13 +150,22 @@ function Board() {
 
   // 🔴 TOP IS THE DEFAULT. The board's whole point is which ideas people want
   // most, so the ranked view is the primary object; "Newest" is the alternative.
-  // The cost is that the bounded scan now runs on COLD BOOT rather than on a
-  // toggle — mitigated below by painting page 1 immediately and continuing the
-  // scan in the background, so first paint still costs exactly one round-trip.
+  // Both are the STORE's own sorts (`-mark:vote`, `-createdAt`), so the first
+  // page is already the true top of the board and first paint costs exactly
+  // one round-trip with nothing left to scan.
   const [sort, setSort] = useState<SortMode>('top');
-  const [scanning, setScanning] = useState(false);
-  /** True when the server still has rows we never loaded — the horizon binds. */
+  /** True when the server still has rows we never loaded — search's horizon binds. */
   const [horizonBinds, setHorizonBinds] = useState(false);
+
+  /**
+   * Bumped by every board (re)load. A list answer is applied only if no newer
+   * load started after it — otherwise a slow page for the PREVIOUS sort could
+   * land on top of the current one, cursor included, and a cursor is valid
+   * only with the sort that issued it.
+   */
+  const listSeq = useRef(0);
+  const itemsRef = useRef<RequestItem[]>([]);
+  itemsRef.current = items;
 
   const [query, setQuery] = useState('');
 
@@ -183,8 +180,8 @@ function Board() {
    * the idempotent `vote()`, which changed nothing, and the viewer had to click
    * AGAIN to unvote: the "double-click to unvote" bug.
    *
-   * The server now sends `viewerVoted` on every listed row, so that is the
-   * source of truth. This map holds ONLY keys the viewer toggled in this
+   * The store reports the viewer's own marks on every document (mapped onto
+   * `viewerVoted`), so that is the source of truth. This map holds ONLY keys the viewer toggled in this
    * session; a rollback deletes the entry and the row falls back to server
    * truth, which is strictly better than restoring a snapshot.
    */
@@ -197,7 +194,7 @@ function Board() {
   const [composerOpen, setComposerOpen] = useState(false);
 
   const isVoted = useCallback(
-    (item: SharedListItem): boolean => {
+    (item: RequestItem): boolean => {
       const override = voteOverride.get(item.key);
       return override !== undefined ? override : item.viewerVoted;
     },
@@ -205,17 +202,17 @@ function Board() {
   );
 
   /**
-   * Page forward from `startCursor`, collecting well-formed rows not already
-   * seen, up to {@link TOP_SCAN_MAX_PAGES}. Malformed rows are dropped here so
-   * one bad row can't poison the ranked window.
+   * Page forward from `startCursor` in the active order, collecting well-formed
+   * rows not already seen, up to {@link LOAD_MORE_MAX_PAGES}. Malformed rows are
+   * dropped here so one bad row can't poison the board.
    */
   const pageForward = useCallback(
     async (startCursor: string | undefined, seenKeys: Set<string>) => {
       let cursor = startCursor;
       let pages = 0;
-      const fetched: SharedListItem[] = [];
-      while (cursor && pages < TOP_SCAN_MAX_PAGES) {
-        const res = await shared.list({ limit: PAGE_SIZE, cursor });
+      const fetched: RequestItem[] = [];
+      while (cursor && pages < LOAD_MORE_MAX_PAGES) {
+        const res = await store.list({ sort, limit: PAGE_SIZE, cursor });
         for (const it of res.items) {
           if (isWellFormedItem(it) && !seenKeys.has(it.key)) {
             seenKeys.add(it.key);
@@ -227,78 +224,68 @@ function Board() {
       }
       return { fetched, finalCursor: cursor };
     },
-    [shared],
+    [store, sort],
   );
 
   /**
-   * Load the board.
+   * Load the board's first page in the active order.
    *
-   * 🔴 FIRST PAINT COSTS ONE ROUND-TRIP, always. Page 1 lands in state and
-   * `loading` clears before the scan continues, so making "Top" the default did
-   * NOT move the deep scan onto the critical path. The scan then runs in the
-   * background with a visible "ranking the whole board" status, and the ranking
-   * settles a moment later. The alternative — awaiting the whole scan before the
-   * first paint — would have cost up to nine sequential round-trips before
-   * anything appeared.
+   * 🔴 ONE ROUND-TRIP. The store ranks server-side, so there is no background
+   * scan to run after it. The spinner shows only when there is nothing on
+   * screen yet: re-sorting or refreshing after a post keeps the current rows up
+   * (already re-ordered client-side by `sortItems`) until the answer lands.
    */
   const refreshList = useCallback(async () => {
-    setLoading(true);
+    const seq = (listSeq.current += 1);
+    if (itemsRef.current.length === 0) setLoading(true);
     setListError(null);
     try {
-      const res = await shared.list({ limit: PAGE_SIZE });
-      const firstPage = res.items.filter(isWellFormedItem);
-      setItems(firstPage);
+      const res = await store.list({ sort, limit: PAGE_SIZE });
+      if (seq !== listSeq.current) return;
+      setItems(res.items.filter(isWellFormedItem));
       setNextCursor(res.nextCursor);
       setHorizonBinds(Boolean(res.nextCursor));
-      setLoading(false);
-
-      if (res.nextCursor) {
-        setScanning(true);
-        try {
-          const seen = new Set(firstPage.map((i) => i.key));
-          const { fetched, finalCursor } = await pageForward(res.nextCursor, seen);
-          if (fetched.length > 0) {
-            setItems((prev) => {
-              const known = new Set(prev.map((i) => i.key));
-              return [...prev, ...fetched.filter((i) => !known.has(i.key))];
-            });
-          }
-          setNextCursor(finalCursor);
-          setHorizonBinds(Boolean(finalCursor));
-        } finally {
-          setScanning(false);
-        }
-      }
     } catch (err) {
+      if (seq !== listSeq.current) return;
       setListError(classifyWriteError(err).message);
-      setLoading(false);
-      setScanning(false);
+    } finally {
+      if (seq === listSeq.current) setLoading(false);
     }
-  }, [shared, pageForward]);
+  }, [store, sort]);
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
+    const seq = listSeq.current;
     setLoadingMore(true);
     try {
       const { fetched, finalCursor } = await pageForward(
         nextCursor,
         new Set(items.map((i) => i.key)),
       );
+      // A reload (a re-sort, a fresh post) started meanwhile: these rows and this
+      // cursor belong to a query the board is no longer showing.
+      if (seq !== listSeq.current) return;
       if (fetched.length > 0) setItems((prev) => [...prev, ...fetched]);
       setNextCursor(finalCursor);
       setHorizonBinds(Boolean(finalCursor));
     } catch (err) {
-      setListError(classifyWriteError(err).message);
+      if (seq === listSeq.current) setListError(classifyWriteError(err).message);
     } finally {
       setLoadingMore(false);
     }
   }, [pageForward, nextCursor, loadingMore, items]);
 
-  // Initial load once the host context is ready.
+  // Load once the host context is ready, and again whenever the order changes —
+  // each order is its own server query (`refreshList` depends on `sort`) — or
+  // the VIEWER changes. 🔴 The last is load-bearing: `own` and `viewerVoted`
+  // are the store's answers FOR the viewer who asked, so rows listed while
+  // signed out say "not yours, not voted" for everyone. Without a reload, a
+  // viewer who signs in mid-session sees no edit/withdraw on their own requests
+  // and a vote button that lies about their votes.
   useEffect(() => {
     if (!ready) return;
     void refreshList();
-  }, [ready, refreshList]);
+  }, [ready, refreshList, viewerId]);
 
   const setCount = useCallback((key: string, count: number) => {
     setItems((prev) => prev.map((i) => (i.key === key ? { ...i, count } : i)));
@@ -312,13 +299,14 @@ function Board() {
   );
 
   /**
-   * Toggle the viewer's up-vote. Optimistic with rollback: the override and the
-   * count flip immediately, then reconcile with what `vote()`/`unvote()` return.
-   * On failure the override is DELETED (falling back to the server's
-   * `viewerVoted`) and the count is restored — a visible rollback plus a toast.
+   * Toggle the viewer's up-vote (the `vote` mark). Optimistic with rollback: the
+   * override and the count flip immediately, then reconcile with the tally the
+   * store returns. On failure the override is DELETED (falling back to the
+   * server's `viewerVoted`) and the count is restored — a visible rollback plus
+   * a toast.
    */
   const toggleVote = useCallback(
-    async (item: SharedListItem) => {
+    async (item: RequestItem) => {
       if (isAnon) {
         requestSignIn();
         return;
@@ -334,8 +322,9 @@ function Board() {
       setCount(key, Math.max(0, prevCount + (wasVoted ? -1 : 1)));
 
       try {
-        const newCount = wasVoted ? await shared.unvote(key) : await shared.vote(key);
-        setCount(key, newCount);
+        const newCount = wasVoted ? await store.unvote(key) : await store.vote(key);
+        // No tally in the answer: keep the optimistic one rather than invent 0.
+        if (newCount !== undefined) setCount(key, newCount);
         track(wasVoted ? 'request_unvoted' : 'request_voted', { key });
       } catch (err) {
         setCount(key, prevCount);
@@ -353,15 +342,15 @@ function Board() {
         });
       }
     },
-    [isAnon, requestSignIn, pending, isVoted, shared, setCount, track, showActionError],
+    [isAnon, requestSignIn, pending, isVoted, store, setCount, track, showActionError],
   );
 
   const withdraw = useCallback(
-    async (item: SharedListItem) => {
+    async (item: RequestItem) => {
       if (pending.has(item.key)) return;
       setPending((p) => new Set(p).add(item.key));
       try {
-        await shared.withdraw(item.key);
+        await store.withdraw(item.key);
         setItems((prev) => prev.filter((i) => i.key !== item.key));
         setVoteOverride((prev) => {
           if (!prev.has(item.key)) return prev;
@@ -380,19 +369,21 @@ function Board() {
         });
       }
     },
-    [pending, shared, track, showActionError],
+    [pending, store, track, showActionError],
   );
 
   /**
-   * File a platform report against a row. Available to any signed-in viewer.
+   * File a platform report against a row (the store's built-in `report` mark).
+   * Available to any signed-in viewer.
    *
-   * 🔴 This does NOT hide the row and the copy must never suggest it does — the
-   * contract is explicit that a moderator decides.
+   * 🔴 This does NOT hide the row and the copy must never suggest it does — a
+   * Civitai moderator decides. A report cannot be withdrawn, and the board
+   * offers no way to try.
    */
   const report = useCallback(
-    async (item: SharedListItem) => {
+    async (item: RequestItem) => {
       try {
-        await shared.report(item.key);
+        await store.report(item.key);
         track('request_reported', { key: item.key });
         toast.show({
           message: 'Reported to Civitai moderators. The request stays on the board until they review it.',
@@ -402,99 +393,64 @@ function Board() {
         showActionError(err);
       }
     },
-    [shared, track, toast, showActionError],
+    [store, track, toast, showActionError],
   );
 
   /**
-   * Owner-only SUPPRESSION — hide a row from this board.
+   * Edit the viewer's own request in place — key and votes survive.
    *
-   * 🔴 THIS IS NOT DELETION and the platform offers no owner delete. It appends
-   * an owner-authored ledger entry that every client honours by filtering the
-   * target out. The request, its text and its votes remain on the server. See
-   * `src/moderation.ts`.
+   * Conditional on the version this board loaded (`ifVersion`): if the request
+   * changed since (an edit from another tab or device), the store refuses
+   * `version_conflict` instead of silently overwriting the newer text.
    */
-  const suppress = useCallback(
-    async (item: SharedListItem) => {
-      if (pending.has(item.key)) return;
-      setPending((p) => new Set(p).add(item.key));
-      try {
-        await shared.append(buildSuppressionEntry(item.key));
-        track('request_suppressed', { key: item.key });
-        toast.show({
-          message: 'Hidden from the board. The request still exists on the server — this is a hide, not a delete.',
-          color: 'info',
-        });
-        await refreshList();
-      } catch (err) {
-        showActionError(err);
-      } finally {
-        setPending((p) => {
-          const next = new Set(p);
-          next.delete(item.key);
-          return next;
-        });
-      }
-    },
-    [pending, shared, track, toast, refreshList, showActionError],
-  );
-
   const editRequest = useCallback(
-    async (item: SharedListItem, next: { title: string; body?: string }): Promise<boolean> => {
+    async (item: RequestItem, next: { title: string; body?: string }): Promise<boolean> => {
       const title = next.title.trim();
       const body = next.body && next.body.trim() ? next.body.trim() : undefined;
-      const value: SharedAppendValue = {
-        title,
-        ...(body ? { body } : {}),
-        ...(item.value.data !== undefined ? { data: item.value.data } : {}),
-      };
+      const value: RequestValue = { title, ...(body ? { body } : {}) };
       try {
-        await shared.update(item.key, value);
-        setItems((prev) =>
-          prev.map((i) =>
-            i.key === item.key
-              ? { ...i, value: { ...i.value, title, body }, updatedAt: new Date() }
-              : i,
-          ),
-        );
+        const saved = await store.update(item.key, value, { ifVersion: item.version });
+        setItems((prev) => prev.map((i) => (i.key === item.key ? saved : i)));
         track('request_edited', { key: item.key });
         return true;
       } catch (err) {
         showActionError(err);
+        // Lost a race: reload, so the board shows the newer text and the next
+        // attempt is conditional on the CURRENT version, not the stale one.
+        if (classifyWriteError(err).kind === 'conflict') void refreshList();
         return false;
       }
     },
-    [shared, track, showActionError],
+    [store, track, showActionError, refreshList],
   );
 
   const onSubmitted = useCallback(
-    async (posted: { key: string; title: string; body?: string }) => {
+    async (posted: RequestItem) => {
       setJustPostedKey(posted.key);
       setComposerOpen(false);
       setQuery(''); // a fresh post must not land behind an active filter
       track('request_submitted', { key: posted.key });
-      if (viewerId != null) {
-        const now = new Date();
-        const optimistic: SharedListItem = {
-          key: posted.key,
-          authorUserId: viewerId,
-          value: { title: posted.title, body: posted.body },
-          count: 0,
-          createdAt: now,
-          updatedAt: now,
-          viewerVoted: false,
-        };
-        setItems((prev) =>
-          prev.some((i) => i.key === optimistic.key) ? prev : [optimistic, ...prev],
-        );
-      }
+      // The store answered with the stored document, so the row is shown at
+      // once — as the viewer's own — before the board reloads around it.
+      const keepPosted = (prev: RequestItem[]) =>
+        prev.some((i) => i.key === posted.key) ? prev : [posted, ...prev];
+      setItems(keepPosted);
       await refreshList();
+      // 🔴 And it SURVIVES the reload. Under Top a brand-new request has 0 votes,
+      // so on a board longer than one page the reloaded first page does not
+      // contain it — the reload would otherwise un-show the post the viewer just
+      // made. It stays pinned (`justPostedKey`) until the order changes.
+      setItems(keepPosted);
     },
-    [refreshList, viewerId, track],
+    [refreshList, track],
   );
 
   const handleSortChange = useCallback(
     (s: SortMode) => {
       setJustPostedKey(null);
+      // The cursor belongs to the OLD order's query; drop it until the new
+      // order's first page lands, so "Load more" cannot send it with the wrong sort.
+      setNextCursor(undefined);
       setSort(s);
       track('sort_changed', { sort: s });
     },
@@ -503,8 +459,8 @@ function Board() {
 
   // ---- derived board ----
 
-  /** Ledger entries removed, owner-suppressed rows hidden. Never rendered raw. */
-  const visible = useMemo(() => visibleRequests(items, OWNER_USER_ID), [items]);
+  /** Every loaded request. (Moderation is the store's: a hidden row is never listed.) */
+  const visible = items;
 
   const ordered = useMemo(() => {
     const base = sortItems(visible, sort);
@@ -660,13 +616,6 @@ function Board() {
             </span>
           )}
 
-          {scanning && (
-            <Group gap={8} align="center" role="status" aria-live="polite" data-testid="scanning">
-              <Loader size="sm" />
-              <span style={metaText}>Ranking the whole board…</span>
-            </Group>
-          )}
-
           {loading ? (
             <Group gap={10} align="center" role="status" aria-live="polite" data-testid="app-loading">
               <Loader size="sm" />
@@ -742,16 +691,13 @@ function Board() {
                   key={item.key}
                   item={item}
                   layout={layout.row}
-                  viewerId={viewerId}
                   isAnon={isAnon}
-                  owner={owner}
                   voted={isVoted(item)}
                   busy={pending.has(item.key)}
                   reduced={reduced}
                   onVote={() => void toggleVote(item)}
                   onWithdraw={() => void withdraw(item)}
                   onReport={() => void report(item)}
-                  onSuppress={() => void suppress(item)}
                   onEdit={(next) => editRequest(item, next)}
                 />
               ))}
@@ -778,7 +724,7 @@ function Board() {
         title="Request an app"
         size="md"
       >
-        <SubmitForm disabled={!ready} shared={shared} items={visible} onSubmitted={onSubmitted} />
+        <SubmitForm disabled={!ready} store={store} items={visible} onSubmitted={onSubmitted} />
       </Modal>
     </div>
   );
@@ -787,15 +733,15 @@ function Board() {
 /** The submit form. Owns its own draft + submit lifecycle. */
 function SubmitForm({
   disabled,
-  shared,
+  store,
   items,
   onSubmitted,
 }: {
   disabled: boolean;
-  shared: ReturnType<typeof useSharedStorage>;
+  store: ReturnType<typeof useRequestStore>;
   /** The already-loaded board — read (never mutated) for the duplicate nudge. */
-  items: SharedListItem[];
-  onSubmitted: (posted: { key: string; title: string; body?: string }) => Promise<void> | void;
+  items: RequestItem[];
+  onSubmitted: (posted: RequestItem) => Promise<void> | void;
 }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -818,10 +764,13 @@ function SubmitForm({
     setError(null);
     try {
       const trimmedBody = body.trim() ? body.trim() : undefined;
-      const { key } = await shared.append({ title: trimmedTitle, body: trimmedBody });
+      const posted = await store.append({
+        title: trimmedTitle,
+        ...(trimmedBody ? { body: trimmedBody } : {}),
+      });
       setTitle('');
       setBody('');
-      await onSubmitted({ key, title: trimmedTitle, body: trimmedBody });
+      await onSubmitted(posted);
     } catch (err) {
       setError(classifyWriteError(err).message);
     } finally {
@@ -842,7 +791,10 @@ function SubmitForm({
             label="What should we build?"
             placeholder="e.g. A prompt-library app with tags"
             value={title}
-            maxLength={TITLE_MAX + 40 /* let the server be the hard gate; warn softly */}
+            // Typing a little past the limit shows the over-limit warning rather
+            // than silently truncating; the disabled submit is the hard gate.
+            // (The document store caps the document's BYTES, not the title.)
+            maxLength={TITLE_MAX + 40}
             onChange={(e) => {
               setTitle(e.currentTarget.value);
               if (error) setError(null);
@@ -926,40 +878,31 @@ function SubmitForm({
 function RequestRow({
   item,
   layout,
-  viewerId,
   isAnon,
-  owner,
   voted,
   busy,
   reduced,
   onVote,
   onWithdraw,
   onReport,
-  onSuppress,
   onEdit,
 }: {
-  item: SharedListItem;
+  item: RequestItem;
   layout: BoardLayout['row'];
-  viewerId: number | null;
   isAnon: boolean;
-  owner: boolean;
   voted: boolean;
   busy: boolean;
   reduced: boolean;
   onVote: () => void;
   onWithdraw: () => void;
   onReport: () => void;
-  onSuppress: () => void;
   onEdit: (next: { title: string; body?: string }) => Promise<boolean>;
 }) {
-  const own = isOwnEntry(item.authorUserId, viewerId);
+  const own = isOwnEntry(item);
   const [editing, setEditing] = useState(false);
   // Withdraw removes the post AND its votes with no undo, so it is gated behind
   // an explicit confirm that names the vote count.
   const [confirmingWithdraw, setConfirmingWithdraw] = useState(false);
-  // Suppression is reversible only by an owner edit to the ledger, and it hides
-  // someone else's content — also confirmed, with copy that says "hide".
-  const [confirmingSuppress, setConfirmingSuppress] = useState(false);
   const entry = entryMotionProps('ar-row-in', 'list', reduced);
 
   const menuItems: OverflowMenuItem[] = [];
@@ -988,17 +931,6 @@ function RequestRow({
       'data-testid': 'report-btn',
     });
   }
-  if (owner && !own) {
-    menuItems.push({
-      id: 'suppress',
-      // "Hide", never "Delete" — the row survives on the server.
-      label: 'Hide from board',
-      icon: '⊘',
-      destructive: true,
-      onSelect: () => setConfirmingSuppress(true),
-      'data-testid': 'suppress-btn',
-    });
-  }
 
   // ---- the parts, composed once and arranged twice ----
 
@@ -1006,7 +938,7 @@ function RequestRow({
 
   const meta = (
     <Group gap={8} align="center" wrap>
-      <span style={metaText}>{authorLabel(item.authorUserId, viewerId)}</span>
+      <span style={metaText}>{authorLabel(item)}</span>
       <span style={metaDotStyle} aria-hidden>
         ·
       </span>
@@ -1133,50 +1065,6 @@ function RequestRow({
         </Stack>
       </Modal>
 
-      <Modal
-        opened={confirmingSuppress}
-        onClose={() => setConfirmingSuppress(false)}
-        title="Hide this request from the board?"
-        size="sm"
-      >
-        <Stack gap={16} data-testid="suppress-confirm">
-          {/*
-            🔴 This copy is load-bearing. The platform gives an app owner NO
-            delete: the row, its text and its votes stay on the server and this
-            only stops clients rendering it. Saying "delete" here would be a
-            promise the app cannot keep.
-          */}
-          <p style={{ ...mutedText, margin: 0 }}>
-            It stops showing on this board for everyone. It is{' '}
-            <strong style={{ color: token.text }}>not deleted</strong> — the request and its{' '}
-            {item.count} vote{item.count === 1 ? '' : 's'} remain stored on Civitai. To have content
-            removed, report it to moderators instead.
-          </p>
-          <Group justify="flex-end" gap={8}>
-            <Button
-              size="sm"
-              variant="subtle"
-              onClick={() => setConfirmingSuppress(false)}
-              disabled={busy}
-              data-testid="suppress-cancel-btn"
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              color="error"
-              loading={busy}
-              onClick={() => {
-                setConfirmingSuppress(false);
-                onSuppress();
-              }}
-              data-testid="suppress-confirm-btn"
-            >
-              Hide
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
     </Card>
   );
 }
@@ -1187,7 +1075,7 @@ function EditForm({
   onCancel,
   onSave,
 }: {
-  item: SharedListItem;
+  item: RequestItem;
   onCancel: () => void;
   onSave: (next: { title: string; body?: string }) => Promise<boolean>;
 }) {

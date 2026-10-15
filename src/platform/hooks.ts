@@ -2,13 +2,13 @@
 //
 // These keep the SIGNATURES the the blocks-react bridge package hooks had, so the port
 // is a change of transport rather than a rewrite of 1,300 lines of board logic.
-// Each one is a thin adapter; the interesting code is in `sharedStorage.ts`.
+// Each one is a thin adapter; the interesting code is in `requests.ts`.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { getClient } from './client.js';
-import { createSharedStorage } from './sharedStorage.js';
-import type { SharedStorage, Theme, Viewer } from './types.js';
+import { createRequestStore } from './requests.js';
+import type { RequestStore, Theme, Viewer } from './types.js';
 
 export interface BlockContextValue {
   /** `false` until the host handshake lands. `viewer` is not meaningful before. */
@@ -76,14 +76,14 @@ export function useBlockContext(): BlockContextValue {
 }
 
 /**
- * The shared-storage client.
+ * The board's document-store client (the `requests` collection).
  *
  * Memoised to a stable identity because the board lists it in the dependency
  * arrays of several `useCallback`s — a fresh object per render would rebuild
  * `refreshList` every time and re-fire its effect in a loop.
  */
-export function useSharedStorage(): SharedStorage {
-  return useMemo(() => createSharedStorage(), []);
+export function useRequestStore(): RequestStore {
+  return useMemo(() => createRequestStore(), []);
 }
 
 /** Starts the host's sign-in flow; the block re-initialises as a signed-in viewer. */
@@ -134,16 +134,16 @@ export function useBlockResize(ref: React.RefObject<HTMLElement | null>): void {
  *
  * 🔴 THIS IS A NO-OP SHIM, AND THAT IS A DELIBERATE, TEMPORARY LOSS.
  * the blocks-react bridge package sent these events to the host over the bridge.
- * `@civitai/sdk` has no analytics surface and the platform has no REST twin for
- * one (there is no analytics route under `/api/v1/blocks/*`), so the events have
- * nowhere to go on this transport.
+ * `@civitai/sdk` now has `app.host.track`, but it records only events the
+ * manifest declares under `analytics.events` (typed properties, no free text),
+ * and declaring them is its own reviewable manifest change — not made here.
  *
- * It is a shim rather than a deletion so the board's six call sites — and the
- * tests that assert them — survive unchanged. When the SDK gains analytics, the
- * fix is this function's body, not six call sites. In dev the events are logged
+ * It is a shim rather than a deletion so the board's call sites — and the tests
+ * that assert them — survive unchanged. Wiring it up is this function's body
+ * plus that declaration, not a change at every call site. In dev the events are logged
  * so the surface stays observable rather than silently vanishing.
  *
- * See `README.md` → "Known gaps on the SDK transport".
+ * See `README.md` → "Known gaps".
  */
 export function useBlockAnalytics(): {
   track: (event: string, data?: Record<string, unknown>) => void;

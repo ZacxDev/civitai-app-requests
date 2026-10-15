@@ -1,9 +1,9 @@
 // Pure presentation helpers for the App Requests board. Kept framework-free so
 // they're covered by fast node (*.test.ts) unit tests.
 
-import type { SharedListItem } from './platform/index.js';
+import type { RequestItem, SortMode } from './platform/index.js';
 
-export type SortMode = 'top' | 'newest';
+export type { SortMode };
 
 /** The one author label every row gets. Exported so tests pin the string, not a shape. */
 export const AUTHOR_LABEL = 'A Civitai member';
@@ -12,16 +12,15 @@ export const AUTHOR_LABEL = 'A Civitai member';
  * How to label the author of a request — UNIFORM for every row, including the
  * viewer's own.
  *
- * 🔴 Deliberately takes both ids and ignores both. Keeping the parameters is not
- * an oversight: it keeps the call site honest about what a label COULD depend on
- * if the platform ever grew a user lookup, and it keeps the "no branch on the
- * viewer" property visible right here rather than spread over the call sites.
+ * 🔴 Deliberately takes the row and ignores it. Keeping the parameter is not an
+ * oversight: it keeps the call site honest about what a label COULD depend on if
+ * the board ever showed authors, and it keeps the "no branch on the viewer"
+ * property visible right here rather than spread over the call sites.
  *
- * Why uniform. Real per-user identity is platform work, not app work: a listed
- * row carries `authorUserId` as a bare number, no message type resolves a user,
- * and the only identity scope is `user:read:self` — which reads the VIEWER, not
- * the author of a row. So the honest choices were a viewer/other split or one
- * label for everyone.
+ * Why uniform. The document store hands an app no author identity at all unless
+ * the collection declares `showAuthor` (then a USERNAME, never an id), and this
+ * board's `requests` collection does not — so the honest choices were a
+ * viewer/other split (`author.isViewer`) or one label for everyone.
  *
  * 0.3.0 shipped the split and rendered `you` on the viewer's own rows. It read
  * badly for the reason self-reference usually does: the viewer's row looked like
@@ -36,10 +35,7 @@ export const AUTHOR_LABEL = 'A Civitai member';
  * that re-derives one from the other would either put `you` back on the card or
  * hand everyone the edit menu.
  */
-export function authorLabel(
-  _authorUserId: number,
-  _viewerId: number | null | undefined,
-): string {
+export function authorLabel(_item: RequestItem): string {
   return AUTHOR_LABEL;
 }
 
@@ -47,15 +43,16 @@ export function authorLabel(
  * True when the viewer authored the entry (drives the edit + withdraw
  * affordances, and the report-vs-own-actions split in the row menu).
  *
+ * It reads the server's `author.isViewer` (mapped onto `own` in
+ * `src/platform/requests.ts`) — the store decides it against the block token's
+ * subject, so it is right on every device and needs no viewer id here.
+ *
  * 🔴 Independent of {@link authorLabel} by design — see its doc. This is the
  * only thing in the app that distinguishes the viewer's rows, and it must keep
  * distinguishing them.
  */
-export function isOwnEntry(
-  authorUserId: number,
-  viewerId: number | null | undefined,
-): boolean {
-  return viewerId != null && authorUserId === viewerId;
+export function isOwnEntry(item: RequestItem): boolean {
+  return item.own === true;
 }
 
 /**
@@ -86,7 +83,7 @@ export function relativeTime(date: Date, now: Date = new Date()): string {
  * row — brick the whole board unrecoverably. Filtering rows through this BEFORE
  * they reach state degrades one bad row to one MISSING row, not a dead board.
  */
-export function isWellFormedItem(item: SharedListItem | null | undefined): boolean {
+export function isWellFormedItem(item: RequestItem | null | undefined): boolean {
   return (
     item != null &&
     typeof item.key === 'string' &&
@@ -98,21 +95,30 @@ export function isWellFormedItem(item: SharedListItem | null | undefined): boole
   );
 }
 
+/** Code-point order, the store's own key order (`<`, not `localeCompare`). */
+function byKeyDesc(a: RequestItem, b: RequestItem): number {
+  return a.key < b.key ? 1 : a.key > b.key ? -1 : 0;
+}
+
 /**
- * Order the board for display. The server returns entries newest-first; `newest`
- * preserves that, `top` re-sorts by vote count (descending), breaking ties by
- * recency (newer first) so the order is stable and intuitive. Pure + total — it
- * returns a new array and never mutates the input.
+ * Order the LOADED rows for display, in the same order the server ranked them.
+ *
+ * The server already returns each page in the active order (`-mark:vote` or
+ * `-createdAt`, ties broken by key in the same direction — see
+ * `src/platform/requests.ts`). This re-applies that exact order client-side so
+ * that an optimistic tally change re-ranks a row immediately, and so a row
+ * merged in from a later page lands where the server would have put it. The
+ * tie-break is the server's (key, descending) — a different one here would let
+ * the board disagree with the page boundary it was given.
+ *
+ * Pure + total — it returns a new array and never mutates the input.
  */
-export function sortItems(items: SharedListItem[], mode: SortMode): SharedListItem[] {
+export function sortItems(items: RequestItem[], mode: SortMode): RequestItem[] {
   const copy = items.slice();
   if (mode === 'newest') {
-    return copy.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return copy.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || byKeyDesc(a, b));
   }
-  return copy.sort((a, b) => {
-    if (b.count !== a.count) return b.count - a.count;
-    return b.createdAt.getTime() - a.createdAt.getTime();
-  });
+  return copy.sort((a, b) => b.count - a.count || byKeyDesc(a, b));
 }
 
 /** Character-count hint text for the length-limited inputs. */
@@ -174,10 +180,10 @@ export const SIMILAR_THRESHOLD = 0.34;
  */
 export function findSimilarRequests(
   title: string,
-  items: SharedListItem[],
+  items: RequestItem[],
   limit = 3,
   threshold = SIMILAR_THRESHOLD,
-): SharedListItem[] {
+): RequestItem[] {
   const trimmed = title.trim();
   if (trimmed.length < 4) return [];
   return items

@@ -1,212 +1,245 @@
 // A fake Civitai, for the dev harness and the end-to-end tests.
 //
-// 🔴 WHY THIS REPLACED THE SDK MOCK HOST. The old harness played a mock HOST and
-// answered the board's `SHARED_*` postMessage ops. After the port the board does
-// not send those messages — it makes REST calls — so a mock host would answer a
-// conversation nobody is having any more, and the e2e tests would pass while
-// exercising nothing. The fake therefore sits where the real boundary now is:
-// `fetch`.
+// Two halves, each the SDK's own:
+//   * a scripted HOST (`createFakeTransport`) that completes the handshake and
+//     names the viewer;
+//   * an in-memory DOCUMENT STORE (`createFakeStorage`) built from this app's
+//     real `block.manifest.json`. It is the SDK's document-store client running
+//     against a server that enforces the platform's storage contract — scopes
+//     and consent, the write policy, the minimum-trust gate, anonymous readers,
+//     moderation, error codes and statuses. The SDK runs the platform's own
+//     contract suite against it.
 //
-// What stays real: the board, every hook in `./hooks`, and the whole of
-// `./sharedStorage` — including its URL construction, its query parameters, its
-// date revival and its error handling. Only the server is fake. That is the
-// point of testing here rather than by stubbing the client.
+// What stays real: the board, every hook in `./hooks`, the whole of
+// `./requests` (its collection/mark/sort names, its mapping, its consent retry)
+// and the SDK's storage client. Only the server is fake. That is the point of
+// testing here rather than by stubbing the board's store.
+//
+// 🔴 The manifest is IMPORTED, not restated. A fake built from a hand-copied
+// declaration would go on agreeing with the board after the manifest drifted;
+// built from the real file, a renamed collection or an undeclared mark is
+// refused here exactly as the server would refuse it.
 
-import { createFakeTransport } from '@civitai/sdk/testing';
+import { StorageError, type DocumentStorage } from '@civitai/sdk';
+import {
+  createFakeStorage,
+  createFakeTransport,
+  type FakeStorage,
+  type FakeStorageSession,
+  type FakeStorageViewer,
+} from '@civitai/sdk/testing';
 
-import type { SharedAppendValue, SharedListItem, Theme } from './types.js';
+import manifest from '../../block.manifest.json';
+import { REQUESTS_COLLECTION, VOTE_MARK } from './requests.js';
+import type { PlatformOverrides } from './client.js';
+import type { RequestValue, Theme } from './types.js';
 
-/** One seeded row. `voters` seeds both the count and the one-vote-per-user set. */
-export interface MockSharedSeed {
-  value: SharedAppendValue;
-  authorUserId: number;
+/** A viewer of the fake: the host's identity and the store's, kept as one. */
+export interface FakeViewer {
+  id: number;
+  username: string;
+  /** Passes the minimum-trust gate. Default `true`. */
+  trusted?: boolean;
+}
+
+/** One seeded request. */
+export interface FakeSeed {
+  value: RequestValue;
+  /** Who wrote it. The viewer's own id makes it the viewer's own request. */
+  authorId: number;
+  /** User ids that have voted on it — seeds the tally AND each voter's mark. */
   voters?: number[];
-  /**
-   * Pin this row's key.
-   *
-   * 🔴 USE THIS WHENEVER A TEST NEEDS TO REFER TO A ROW BY KEY — for instance a
-   * moderation ledger entry naming its target. The real server mints an opaque
-   * ULID, so any test that guesses a key is asserting against a fake's internals
-   * rather than the platform's contract. The previous suite hardcoded
-   * `shared_2`, which was the old mock host's minting convention and nothing the
-   * real server ever produces; it would have gone on passing while describing
-   * something untrue. Naming the key here keeps the test independent of how
-   * either server mints one.
-   */
-  key?: string;
 }
 
-export interface FakeCivitaiOptions {
+export interface FakeBoardOptions {
   /** `null` is an anonymous viewer — a supported, read-only path. */
-  viewer?: { id: number; username?: string } | null;
+  viewer?: FakeViewer | null;
   theme?: Theme;
-  seed?: MockSharedSeed[];
-  /** Fail this many mutations before succeeding, for the failure-path scenarios. */
+  seed?: FakeSeed[];
+  /** Fail this many MUTATIONS (anything but a read) with a 503 before succeeding. */
   failNext?: number;
-  /** Rows per page. Small by default so cursor paging is actually exercised. */
-  pageSize?: number;
+  /**
+   * Scopes the viewer's token does not carry yet — e.g. `['apps:storage:publish']`
+   * before they have granted consent. The store answers such a write
+   * `403 consent_required`, exactly as the server does for a missing scope.
+   */
+  revoked?: readonly string[];
+  /**
+   * How the stand-in consent dialog answers: `true` grants (the token then
+   * carries every manifest scope), `false` declines. Default `false`.
+   */
+  grantConsent?: boolean;
+  /** Answer every data operation `503 storage_disabled`, as a server with no database. */
+  disabled?: boolean;
 }
 
-interface Row {
-  key: string;
-  authorUserId: number;
-  value: SharedAppendValue;
-  voters: Set<number>;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface FakeCivitai {
+export interface FakeBoard {
   /** Pass to `__configurePlatform`. */
-  transport: ReturnType<typeof createFakeTransport>;
-  /** Pass to `__configurePlatform`. */
-  fetch: typeof fetch;
-  /** The live store, for a test that wants to assert server state directly. */
-  rows: () => SharedListItem[];
+  overrides: PlatformOverrides;
+  /** The store, for a test that wants to assert or arrange server state directly. */
+  store: FakeStorage;
+  /** The store as some other user — for arranging, or reading back as them. */
+  as: (viewer: FakeViewer | null) => FakeStorageSession;
+  /** Every scope list the board asked the consent dialog for, in order. */
+  grantRequests: (readonly string[])[];
+  /** The `signal` each of those asks carried — an unbounded ask hangs forever on a closed dialog. */
+  grantSignals: (AbortSignal | undefined)[];
 }
 
-const VIEWER_DEFAULT = { id: 7777, username: 'dev-viewer' };
+export const DEV_VIEWER: FakeViewer = { id: 7777, username: 'dev-viewer' };
+
+const toStoreViewer = (v: FakeViewer): FakeStorageViewer => ({
+  id: v.id,
+  username: v.username,
+  trusted: v.trusted ?? true,
+});
+
+/** Mutating methods of a collection — the ones `failNext` intercepts. */
+const MUTATIONS = new Set(['create', 'put', 'delete', 'mark', 'unmark', 'increment']);
 
 /**
- * Build a fake host + a fake civitai.com.
- *
- * The REST behaviour mirrors the real routes closely enough that the board
- * cannot tell them apart: `list` pages by opaque cursor and stamps each row's
- * `viewerVoted` for the CALLER, mutations refuse an anonymous caller the way
- * the block-scope middleware does, and `withdraw` only removes the caller's own
- * row.
+ * Wrap a document store so its next `failNext()` mutations reject with the
+ * store's own transient envelope (`503 service_unavailable`), as a server under
+ * an outage answers. Reads pass through untouched.
  */
-export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai {
-  const viewer = options.viewer === undefined ? VIEWER_DEFAULT : options.viewer;
-  const pageSize = options.pageSize ?? 20;
-  let failuresLeft = options.failNext ?? 0;
+function withScriptedFailures(storage: DocumentStorage, failuresLeft: () => boolean): DocumentStorage {
+  return {
+    info: (opts) => storage.info(opts),
+    collection: <T extends object = Record<string, unknown>>(name: string) => {
+      const coll = storage.collection<T>(name);
+      return new Proxy(coll, {
+        get(target, prop, receiver) {
+          const value = Reflect.get(target, prop, receiver) as unknown;
+          if (typeof prop !== 'string' || !MUTATIONS.has(prop) || typeof value !== 'function') {
+            return value;
+          }
+          return (...args: unknown[]) => {
+            if (failuresLeft()) {
+              const message = 'storage is temporarily unavailable';
+              return Promise.reject(
+                new StorageError(503, 'service_unavailable', message, {
+                  code: 'service_unavailable',
+                  message,
+                  error: message,
+                }),
+              );
+            }
+            return (value as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        },
+      });
+    },
+  };
+}
 
-  let counter = 0;
-  const now = Date.now();
-  const store: Row[] = (options.seed ?? []).map((s, i) => ({
-    key: s.key ?? `seed-${(counter += 1)}`,
-    authorUserId: s.authorUserId,
-    value: s.value,
-    voters: new Set(s.voters ?? []),
-    // Descending so the seed's first entry is the NEWEST, which is the order
-    // the board's "Newest" sort expects to receive.
-    createdAt: new Date(now - i * 60_000),
-    updatedAt: new Date(now - i * 60_000),
-  }));
+/**
+ * Build a fake host + a fake document store and seed the board.
+ *
+ * Async because seeding goes THROUGH the store as each author and each voter —
+ * the same calls a real board would have made — rather than writing its rows
+ * directly; the fake has no back door, which is what keeps it honest.
+ * Seeds are created oldest-first so the FIRST seed is the NEWEST, on a clock
+ * one minute apart.
+ */
+export async function createFakeBoard(options: FakeBoardOptions = {}): Promise<FakeBoard> {
+  const viewer = options.viewer === undefined ? DEV_VIEWER : options.viewer;
+  const seed = options.seed ?? [];
 
-  const toItem = (row: Row): SharedListItem => ({
-    key: row.key,
-    authorUserId: row.authorUserId,
-    value: row.value,
-    count: row.voters.size,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    viewerVoted: viewer ? row.voters.has(viewer.id) : false,
+  const realNow = Date.now();
+  let clock = realNow - (seed.length + 1) * 60_000;
+  let seeding = true;
+
+  const store = createFakeStorage({
+    manifest,
+    viewer: viewer ? toStoreViewer(viewer) : null,
+    now: () => (seeding ? clock : Date.now()),
+    ...(options.disabled ? { disabled: true } : {}),
   });
+  const as = (v: FakeViewer | null) => store.as({ viewer: v ? toStoreViewer(v) : null });
+
+  // Arrange: author each seed, then cast each voter's mark, as those users and
+  // with every manifest scope. A disabled store refuses these too, so a
+  // disabled board is always empty.
+  if (!options.disabled) {
+    for (let i = seed.length - 1; i >= 0; i -= 1) {
+      const s = seed[i]!;
+      clock += 60_000;
+      // Arranging sessions are always TRUSTED: a seed is history, and an
+      // untrusted test viewer must still be able to own a seeded request.
+      const authorSession = store.as({
+        viewer: {
+          ...toStoreViewer(
+            viewer && s.authorId === viewer.id ? viewer : { id: s.authorId, username: `user_${s.authorId}` },
+          ),
+          trusted: true,
+        },
+        scopes: manifest.scopes,
+      });
+      const doc = await authorSession.storage.collection<RequestValue>(REQUESTS_COLLECTION).create(s.value);
+      for (const voterId of s.voters ?? []) {
+        const voter =
+          viewer && voterId === viewer.id ? viewer : { id: voterId, username: `user_${voterId}` };
+        await store
+          .as({ viewer: { ...toStoreViewer(voter), trusted: true }, scopes: manifest.scopes })
+          .storage.collection(REQUESTS_COLLECTION)
+          .mark(doc.key, VOTE_MARK);
+      }
+    }
+  }
+  seeding = false;
+
+  let failures = options.failNext ?? 0;
+  const consume = () => {
+    if (failures <= 0) return false;
+    failures -= 1;
+    return true;
+  };
+
+  // The board's own session. Without the revoked scopes until consent is
+  // granted; with every manifest scope after.
+  const revoked = new Set(options.revoked ?? []);
+  const sessionFor = (granted: boolean) =>
+    withScriptedFailures(
+      store.as({
+        viewer: viewer ? toStoreViewer(viewer) : null,
+        scopes: granted ? manifest.scopes : manifest.scopes.filter((sc) => !revoked.has(sc)),
+      }).storage,
+      consume,
+    );
+  let boardStorage = sessionFor(revoked.size === 0);
+  const grantRequests: (readonly string[])[] = [];
+  const grantSignals: (AbortSignal | undefined)[] = [];
 
   const transport = createFakeTransport({
     ready: true,
     hostOrigin: 'https://civitai.com',
-    viewer: viewer ? { id: viewer.id, username: viewer.username ?? null } : null,
+    viewer: viewer ? { id: viewer.id, username: viewer.username } : null,
     theme: options.theme ?? 'dark',
-    token: { raw: 'fake-block-token', scopes: [], expiresAt: new Date(now + 15 * 60_000) },
+    token: { raw: 'fake-block-token', scopes: [], expiresAt: new Date(realNow + 15 * 60_000) },
   });
   // The client asks the host for a token; without an answer `initialize()` never
   // resolves and every test times out on a blank board.
   transport.handle('REQUEST_TOKEN', () => ({
-    token: { token: 'fake-block-token', expiresAt: new Date(now + 15 * 60_000).toISOString() },
+    token: { token: 'fake-block-token', expiresAt: new Date(realNow + 15 * 60_000).toISOString() },
   }));
 
-  const json = (status: number, body: unknown): Response =>
-    new Response(JSON.stringify(body), {
-      status,
-      headers: { 'Content-Type': 'application/json' },
-    });
-
-  /** The real routes reject an anonymous mutation; so does this. */
-  const requireViewer = (): Response | null =>
-    viewer ? null : json(403, { error: 'Sign in to contribute — anonymous callers cannot write.' });
-
-  /** Consume one scripted failure, if any are left. */
-  const scriptedFailure = (): Response | null => {
-    if (failuresLeft <= 0) return null;
-    failuresLeft -= 1;
-    return json(503, { error: 'SHARED_UNAVAILABLE: the requests service is unavailable' });
+  return {
+    overrides: {
+      transport,
+      // Nothing on the data path may reach the network; the setup file's global
+      // `fetch` stub rejects loudly if anything tries.
+      storage: () => boardStorage,
+      requestGrants: async (scopes, opts) => {
+        grantRequests.push(scopes);
+        grantSignals.push(opts.signal);
+        if (!options.grantConsent) return false;
+        boardStorage = sessionFor(true);
+        return true;
+      },
+    },
+    store,
+    as,
+    grantRequests,
+    grantSignals,
   };
-
-  const fakeFetch: typeof fetch = async (input, init) => {
-    const url = new URL(typeof input === 'string' ? input : (input as Request).url);
-    const path = url.pathname.replace(/^.*\/api\/v1\/blocks\/shared-storage\//, '');
-    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
-
-    if (path === 'list') {
-      const limit = Number(url.searchParams.get('limit') ?? pageSize);
-      const cursor = url.searchParams.get('cursor');
-      const start = cursor ? Number(cursor) : 0;
-      const slice = store.slice(start, start + limit);
-      const next = start + limit < store.length ? String(start + limit) : undefined;
-      return json(200, {
-        items: slice.map((row) => ({
-          ...toItem(row),
-          createdAt: row.createdAt.toISOString(),
-          updatedAt: row.updatedAt.toISOString(),
-        })),
-        metadata: { nextCursor: next },
-      });
-    }
-
-    const refusal = requireViewer() ?? scriptedFailure();
-    if (refusal) return refusal;
-    const me = viewer as { id: number };
-
-    const find = () => store.find((r) => r.key === body.key);
-
-    switch (path) {
-      case 'append': {
-        const key = `new-${(counter += 1)}`;
-        store.unshift({
-          key,
-          authorUserId: me.id,
-          value: body.value as SharedAppendValue,
-          voters: new Set(),
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-        return json(200, { key });
-      }
-      case 'update': {
-        const row = find();
-        if (!row) return json(404, { error: 'No such entry' });
-        if (row.authorUserId !== me.id) return json(403, { error: 'Not your entry' });
-        row.value = body.value as SharedAppendValue;
-        row.updatedAt = new Date();
-        return json(200, { ok: true });
-      }
-      case 'vote': {
-        const row = find();
-        if (!row) return json(404, { error: 'No such entry' });
-        row.voters.add(me.id);
-        return json(200, { count: row.voters.size });
-      }
-      case 'unvote': {
-        const row = find();
-        if (!row) return json(404, { error: 'No such entry' });
-        row.voters.delete(me.id);
-        return json(200, { count: row.voters.size });
-      }
-      case 'withdraw': {
-        const index = store.findIndex((r) => r.key === body.key);
-        if (index < 0) return json(200, { ok: true, deleted: false });
-        if (store[index]!.authorUserId !== me.id) return json(403, { error: 'Not your entry' });
-        store.splice(index, 1);
-        return json(200, { ok: true, deleted: true });
-      }
-      case 'report':
-        return json(200, { ok: true });
-      default:
-        return json(404, { error: `Unhandled route: ${path}` });
-    }
-  };
-
-  return { transport, fetch: fakeFetch, rows: () => store.map(toItem) };
 }

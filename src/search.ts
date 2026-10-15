@@ -10,7 +10,7 @@
 // Pure + framework-free so it is covered by fast node unit tests with literal
 // expected values.
 
-import type { SharedListItem } from './platform/index.js';
+import type { RequestItem } from './platform/index.js';
 
 /** Lowercase, strip punctuation to spaces, collapse runs. Total. */
 function normalize(s: string): string {
@@ -63,7 +63,7 @@ export const TITLE_BONUS = 0.25;
  * somewhere (title or body) — an AND, so adding a word narrows rather than
  * widens, which is what people expect from a search box.
  */
-export function requestScore(query: string, item: SharedListItem): number {
+export function requestScore(query: string, item: RequestItem): number {
   const q = normalize(query);
   if (q.length === 0) return SCORE_NONE;
   const tokens = q.split(' ');
@@ -94,7 +94,7 @@ export function requestScore(query: string, item: SharedListItem): number {
  * reading. An empty/whitespace query returns the input unchanged (same array
  * contents, new array), never an empty list.
  */
-export function filterRequests(query: string, items: SharedListItem[]): SharedListItem[] {
+export function filterRequests(query: string, items: RequestItem[]): RequestItem[] {
   if (normalize(query).length === 0) return items.slice();
   return items.filter((it) => requestScore(query, it) > SCORE_NONE);
 }
