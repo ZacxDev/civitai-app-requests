@@ -10,13 +10,13 @@ importers:
     dependencies:
       '@civitai/components':
         specifier: ^0.5.0
-        version: 0.5.0(@civitai/sdk@0.7.0)
+        version: 0.5.0(@civitai/sdk@0.14.0)
       '@civitai/components-react':
         specifier: ^0.5.0
-        version: 0.5.0(@civitai/sdk@0.7.0)(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        version: 0.5.0(@civitai/sdk@0.14.0)(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@civitai/sdk':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.14.0
+        version: 0.14.0
       '@civitai/theme':
         specifier: ^0.3.0
         version: 0.3.0
@@ -113,8 +113,8 @@ packages:
     resolution: {integrity: sha512-z2dCYCnFZCm84F4Oe7bPahTfLZbClInQCeFaz5a1Y3CfRIjHJisG7WbtcpAhaw0Qa+bsQ+plwF+K2MCyCbgZFg==}
     engines: {git: '>=2.11.0', node: '>=18.0.0', npm: '>=7.19.0', yarn: '>=1.7.0'}
 
-  '@civitai/sdk@0.7.0':
-    resolution: {integrity: sha512-SsaOIBuzIuH76OBG9i4LB1m+EidvajvzUQwImQ0sg6Bt002UBAt1hv6Hj5u/OjwaJsupq8F61KdBIHT8tPCkUA==}
+  '@civitai/sdk@0.14.0':
+    resolution: {integrity: sha512-cKK1ZPR5hZmth0utebDSrHEfmuabdOFs+2QL1DjGfULsswbdguRkti08BTaWA0cZ9m0lKIikhvpOXVk1IIEQzQ==}
     engines: {node: '>=20'}
 
   '@civitai/theme@0.3.0':
@@ -988,9 +988,9 @@ snapshots:
 
   '@civitai/app-sdk@0.42.0': {}
 
-  '@civitai/components-react@0.5.0(@civitai/sdk@0.7.0)(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@civitai/components-react@0.5.0(@civitai/sdk@0.14.0)(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
-      '@civitai/components': 0.5.0(@civitai/sdk@0.7.0)
+      '@civitai/components': 0.5.0(@civitai/sdk@0.14.0)
       '@civitai/theme': 0.4.0
       '@lit/react': 1.0.8(@types/react@19.2.17)
       react: 19.2.7
@@ -999,12 +999,12 @@ snapshots:
       - '@civitai/sdk'
       - '@types/react'
 
-  '@civitai/components@0.5.0(@civitai/sdk@0.7.0)':
+  '@civitai/components@0.5.0(@civitai/sdk@0.14.0)':
     dependencies:
       '@civitai/theme': 0.4.0
       lit: 3.3.3
     optionalDependencies:
-      '@civitai/sdk': 0.7.0
+      '@civitai/sdk': 0.14.0
 
   '@civitai/orchestration-client@0.2.0-beta.101':
     dependencies:
@@ -1012,7 +1012,7 @@ snapshots:
       rfc6902: 5.3.0
       tslib: 2.8.1
 
-  '@civitai/sdk@0.7.0':
+  '@civitai/sdk@0.14.0':
     dependencies:
       '@civitai/orchestration-client': 0.2.0-beta.101
 

@@ -1,20 +1,29 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "app-requests",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "name": "App Requests",
   "tagline": "Ask. Vote. Watch it get built.",
   "description": "App Requests is the community board for the apps and features you want on Civitai. Post an idea, up-vote the ones you want most, and watch what people care about rise to the top.\n\nThe board opens ranked by votes, so the most-wanted ideas are the first thing you see. Search filters the requests that have been loaded, and the board tells you when it is looking at only part of a large board rather than pretending otherwise.\n\nA request is a title plus optional details. As you write one, the board surfaces requests that already look similar — up-voting one of those lifts it faster than splitting the vote across a near-duplicate. Your own posts stay yours: edit one in place to fix a typo without losing the votes it has collected, or withdraw it, which removes the request and its votes for good. Every request also carries a Report action that sends it to Civitai moderators for review.\n\nVoting is one vote per person per request, and you can up-vote as many requests as you like. Click a vote again to take it back.\n\nAnyone can read the board signed out; posting, voting and reporting need a verified account at least seven days old and in good standing. Nothing here spends Buzz and nothing is generated — just ideas and votes. Posts are moderated, so keep it kind and constructive.",
   "type": "block",
   "scopes": [
-    "apps:storage:shared:read",
-    "apps:storage:shared:write",
+    "apps:storage",
+    "apps:storage:publish",
     "user:read:self"
   ],
   "scopeJustifications": {
-    "apps:storage:shared:read": "Lists the shared board of app/feature requests visible to all users.",
-    "apps:storage:shared:write": "Posts, edits, up-votes, withdraws and reports requests on the shared board visible to all users, and lets the app owner append the moderation record that hides a request from this board.",
-    "user:read:self": "Reads the viewer's identity to attribute their own posts and gate author-only edit/withdraw."
+    "apps:storage": "Reads the shared requests board, and lets a viewer up-vote, withdraw their own request, or report a request to Civitai moderators.",
+    "apps:storage:publish": "Posting or editing a request publishes the viewer's title and optional details on the shared board, where every visitor can read them.",
+    "user:read:self": "Reads whether the viewer is signed in, to offer posting and voting or a sign-in prompt."
+  },
+  "storage": {
+    "collections": {
+      "requests": {
+        "visibility": "shared",
+        "write": "own",
+        "marks": ["vote"]
+      }
+    }
   },
   "page": {
     "path": "/",

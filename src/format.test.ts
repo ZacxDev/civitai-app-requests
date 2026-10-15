@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { SharedListItem } from './platform/index.js';
+import type { RequestItem } from './platform/index.js';
 
 import {
   authorLabel,
@@ -16,11 +16,12 @@ import {
   TITLE_MAX,
 } from './format.js';
 
-function item(partial: Partial<SharedListItem> & { key: string }): SharedListItem {
+function item(partial: Partial<RequestItem> & { key: string }): RequestItem {
   return {
-    authorUserId: 1,
     value: { title: 'x' },
     count: 0,
+    own: false,
+    version: 1,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-01T00:00:00Z'),
     viewerVoted: false,
@@ -32,47 +33,32 @@ describe('authorLabel', () => {
   // 🔴 REGRESSION (0.3.0 → 0.3.1). 0.3.0 returned `you` when the author was the
   // viewer, so every card on your own board said "you" while everyone else's
   // said "A Civitai member". This assertion is RED on 0.3.0.
-  //
-  // The previous version of this block asserted `authorLabel(42, 42) === 'you'`.
-  // That was not weakened to make anything pass — it is repointed, because it
-  // pinned the defect itself: it asserted the viewer/other SPLIT, which is the
-  // thing being removed. What survives is the part that was always a contract —
-  // the label never leaks the raw numeric id.
-  it('is the SAME label on the viewer\'s own row as on anyone else\'s', () => {
-    expect(authorLabel(42, 42)).toBe('A Civitai member');
-    expect(authorLabel(42, 42)).toBe(authorLabel(42, 7));
+  it("is the SAME label on the viewer's own row as on anyone else's", () => {
+    expect(authorLabel(item({ key: 'mine', own: true }))).toBe('A Civitai member');
+    expect(authorLabel(item({ key: 'mine', own: true }))).toBe(
+      authorLabel(item({ key: 'theirs', own: false })),
+    );
   });
 
-  it('never says "you" for any viewer/author combination', () => {
-    // Enumerated rather than sampled: both ids over the same small domain, plus
-    // the two anonymous viewer shapes. A branch on the viewer anywhere in the
-    // function is caught by one of these.
-    const ids = [0, 1, 7, 42, -3];
-    const viewers: (number | null | undefined)[] = [...ids, null, undefined];
-    for (const author of ids) {
-      for (const viewer of viewers) {
-        const label = authorLabel(author, viewer);
+  it('never says "you" for any row', () => {
+    for (const own of [true, false]) {
+      for (const viewerVoted of [true, false]) {
+        const label = authorLabel(item({ key: 'k', own, viewerVoted }));
         expect(label).toBe('A Civitai member');
         expect(label).not.toMatch(/\byou\b/i);
       }
     }
   });
 
-  it('never leaks the internal numeric handle', () => {
-    expect(authorLabel(4021, 7)).not.toMatch(/#?\d/);
-  });
-
-  it('shows the same label when the viewer is anonymous', () => {
-    expect(authorLabel(42, null)).toBe('A Civitai member');
-    expect(authorLabel(42, undefined)).toBe('A Civitai member');
+  it('never renders a handle or number', () => {
+    expect(authorLabel(item({ key: '01HZX4021', own: false }))).not.toMatch(/#?\d/);
   });
 });
 
 describe('isOwnEntry', () => {
-  it('is true only when ids match and viewer is signed in', () => {
-    expect(isOwnEntry(5, 5)).toBe(true);
-    expect(isOwnEntry(5, 6)).toBe(false);
-    expect(isOwnEntry(5, null)).toBe(false);
+  it("is the store's own `author.isViewer` (mapped onto `own`)", () => {
+    expect(isOwnEntry(item({ key: 'a', own: true }))).toBe(true);
+    expect(isOwnEntry(item({ key: 'b', own: false }))).toBe(false);
   });
 
   // 🔴 The two must stay INDEPENDENT. Making the label uniform is a copy change;
@@ -80,22 +66,15 @@ describe('isOwnEntry', () => {
   // "simplification" that derives one from the other must fail here rather than
   // in production. This is a SEAM guard, not a component guard: it pins the
   // relationship (label constant, gate varies) over the same inputs.
-  it('still distinguishes own rows even though the label no longer does', () => {
-    const cases: Array<[number, number | null | undefined, boolean]> = [
-      [5, 5, true],
-      [5, 6, false],
-      [5, null, false],
-      [5, undefined, false],
-      [0, 0, true],
-    ];
-    for (const [author, viewer, own] of cases) {
-      expect(isOwnEntry(author, viewer)).toBe(own);
-      // ...while the label is flat across every one of those same inputs.
-      expect(authorLabel(author, viewer)).toBe('A Civitai member');
+  it('still distinguishes own rows even though the label does not', () => {
+    const cases = [item({ key: 'a', own: true }), item({ key: 'b', own: false })];
+    for (const c of cases) {
+      expect(isOwnEntry(c)).toBe(c.own);
+      expect(authorLabel(c)).toBe('A Civitai member');
     }
     // The gate really does vary over this set — otherwise the line above would
     // be pinning a constant against another constant and prove nothing.
-    expect(new Set(cases.map(([a, v]) => isOwnEntry(a, v))).size).toBe(2);
+    expect(new Set(cases.map(isOwnEntry)).size).toBe(2);
   });
 });
 
@@ -113,17 +92,25 @@ describe('relativeTime', () => {
 });
 
 describe('sortItems', () => {
-  const a = item({ key: 'a', count: 3, createdAt: new Date('2026-01-03') });
-  const b = item({ key: 'b', count: 9, createdAt: new Date('2026-01-01') });
-  const c = item({ key: 'c', count: 9, createdAt: new Date('2026-01-02') });
+  // Fixtures chosen so KEY order and CREATED order disagree on every tie: `d`
+  // has the highest key but is the oldest, so a tie-break on recency and the
+  // server's tie-break on key produce different boards.
+  const a = item({ key: 'a', count: 3, createdAt: new Date('2026-01-04') });
+  const b = item({ key: 'b', count: 9, createdAt: new Date('2026-01-02') });
+  const c = item({ key: 'c', count: 9, createdAt: new Date('2026-01-03') });
+  const d = item({ key: 'd', count: 9, createdAt: new Date('2026-01-01') });
+  const n1 = item({ key: 'n1', count: 0, createdAt: new Date('2026-02-01') });
+  const n2 = item({ key: 'n2', count: 0, createdAt: new Date('2026-02-01') });
 
-  it('top: by count desc, ties broken by recency', () => {
-    const out = sortItems([a, b, c], 'top');
-    expect(out.map((i) => i.key)).toEqual(['c', 'b', 'a']);
+  it("top: by tally desc, ties broken by KEY desc — the store's own order for `-mark:vote`", () => {
+    expect(sortItems([a, b, c, d], 'top').map((i) => i.key)).toEqual(['d', 'c', 'b', 'a']);
   });
   it('newest: by createdAt desc', () => {
-    const out = sortItems([a, b, c], 'newest');
-    expect(out.map((i) => i.key)).toEqual(['a', 'c', 'b']);
+    expect(sortItems([a, b, c, d], 'newest').map((i) => i.key)).toEqual(['a', 'c', 'b', 'd']);
+  });
+  it("newest: an equal createdAt breaks on KEY desc, as the store's `-createdAt` does", () => {
+    expect(sortItems([n1, n2], 'newest').map((i) => i.key)).toEqual(['n2', 'n1']);
+    expect(sortItems([n2, n1], 'newest').map((i) => i.key)).toEqual(['n2', 'n1']);
   });
   it('does not mutate the input', () => {
     const input = [a, b, c];
@@ -141,23 +128,26 @@ describe('isWellFormedItem', () => {
     expect(isWellFormedItem(null)).toBe(false);
     expect(isWellFormedItem(undefined)).toBe(false);
     // missing value / non-string title
-    expect(isWellFormedItem({ ...item({ key: 'x' }), value: undefined } as unknown as SharedListItem)).toBe(false);
-    expect(isWellFormedItem({ ...item({ key: 'x' }), value: { title: 42 } } as unknown as SharedListItem)).toBe(false);
+    expect(isWellFormedItem({ ...item({ key: 'x' }), value: undefined } as unknown as RequestItem)).toBe(false);
+    expect(isWellFormedItem({ ...item({ key: 'x' }), value: { title: 42 } } as unknown as RequestItem)).toBe(false);
     // createdAt not a Date (e.g. a raw ISO string) — .getTime() would throw
-    expect(isWellFormedItem({ ...item({ key: 'x' }), createdAt: '2026-01-01' } as unknown as SharedListItem)).toBe(false);
+    expect(isWellFormedItem({ ...item({ key: 'x' }), createdAt: '2026-01-01' } as unknown as RequestItem)).toBe(false);
     // invalid Date
-    expect(isWellFormedItem({ ...item({ key: 'x' }), createdAt: new Date('nope') } as unknown as SharedListItem)).toBe(false);
+    expect(isWellFormedItem({ ...item({ key: 'x' }), createdAt: new Date('nope') } as unknown as RequestItem)).toBe(false);
     // non-number count
-    expect(isWellFormedItem({ ...item({ key: 'x' }), count: null } as unknown as SharedListItem)).toBe(false);
+    expect(isWellFormedItem({ ...item({ key: 'x' }), count: null } as unknown as RequestItem)).toBe(false);
   });
   it('the guard matches what sortItems requires (a bad row would throw)', () => {
-    const bad = { ...item({ key: 'bad' }), createdAt: 'not-a-date' } as unknown as SharedListItem;
+    const bad = { ...item({ key: 'bad' }), createdAt: 'not-a-date' } as unknown as RequestItem;
     expect(isWellFormedItem(bad)).toBe(false);
     // Prove the guard is load-bearing: sortItems throws on exactly this row
     // (two elements so the comparator — which calls `.getTime()` — actually runs).
+    // Only `newest` reads the date now: `top` orders by tally then key, as the
+    // store does, so it no longer touches `createdAt`. `relativeTime` still
+    // does, on every rendered row, so the guard is load-bearing either way.
     const good = item({ key: 'good' });
     expect(() => sortItems([good, bad], 'newest')).toThrow();
-    expect(() => sortItems([good, bad], 'top')).toThrow();
+    expect(() => relativeTime((bad as RequestItem).createdAt)).toThrow();
   });
 });
 

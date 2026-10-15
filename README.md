@@ -10,59 +10,64 @@ an app or feature they'd like on Civitai and up-votes others' ideas.
 
 ## What this is
 
-A sandboxed page app served in an iframe by the Civitai host, built entirely on
-the **shared-storage** platform:
+A sandboxed page app served in an iframe by the Civitai host, built on the App
+Blocks **document store** — one shared collection, declared in
+`block.manifest.json`:
 
-- **`useSharedStorage()`** — the per-app, CROSS-USER store. `append()` a
-  `{ title, body? }` idea, `list()` the board (newest-first, cursor-paged),
-  `vote()` / `unvote()` (up-only, one per user, server-enforced), `update()`
-  your own entry in place (fixes a typo without losing votes), `withdraw()`
-  your own entry.
-  Each listed row also carries **`viewerVoted`**, the server's own answer to
-  "has this viewer voted on this row" — which is what the vote button hydrates
-  from. (The app used to keep a per-viewer KV set of voted keys instead; that
-  store could not know about a vote cast on another device or before it existed,
-  which is what produced the *double-click to unvote* bug. It is gone, along
-  with the two `apps:storage:*` scopes it needed.)
-- **`report(key)`** — files a row for **Civitai moderator** review. Filing a
-  report does not hide the row; a moderator decides.
-- **`user:read:self`** — to identify the viewer (own entries get edit +
-  withdraw; the app owner additionally gets the hide affordance below).
+```json
+"storage": { "collections": {
+  "requests": { "visibility": "shared", "write": "own", "marks": ["vote"] }
+}}
+```
+
+- **`requests`** — every viewer reads it, signed in or not; a signed-in viewer
+  `create`s a `{ title, body? }` request, and only its author can edit it in
+  place (`put`, conditional on the version the board loaded, so a concurrent
+  edit is refused rather than overwritten — votes survive an edit) or withdraw
+  it (`delete`, which takes its votes with it).
+- **`vote`** — a per-viewer mark: one per person per request, set with
+  `mark(key, 'vote')` and taken back with `unmark`. The store keeps the tally
+  and reports each viewer's own marks on every document, which is what the vote
+  button hydrates from — a vote cast on another device shows as cast.
+- **`report`** — the built-in mark on every shared collection. It files the
+  request for **Civitai moderator** review; it does not hide it, and it cannot
+  be withdrawn.
+- **`user:read:self`** — whether the viewer is signed in. Authorship comes from
+  the store itself (`author.isViewer`); no numeric user id ever reaches the app.
 - **`useBlockAnalytics()`** — fire-and-forget submit / vote / withdraw / edit /
-  sort / error-boundary events to the host's analytics pipeline.
+  sort / error-boundary events (a local no-op shim; see *Known gaps*).
 
 No Buzz, no generation. Scopes (must match `block.manifest.json`):
-`apps:storage:shared:read`, `apps:storage:shared:write` (the cross-user board),
-and `user:read:self`.
+**`apps:storage`** (read the board, vote, withdraw your own, report),
+**`apps:storage:publish`** (consent-gated: posting or editing publishes the
+viewer's text where everyone can read it — the board asks once, through the
+host's consent dialog, the first time it is needed), and `user:read:self`.
+`src/storage-manifest.test.ts` pins the names the code sends to the names the
+manifest declares, and the scopes to exactly what the declaration needs.
 
 **Sorting.** The board defaults to **Top** — which ideas people want most is the
-whole point of the board, so that is the primary object. Because the server
-exposes no rank or order param, Top is a *client-side ranking over a bounded
-scan*: the app pages forward up to 8 pages of 25 (200 rows), then ranks the
-whole loaded window. First paint still costs exactly **one** round-trip — page 1
-is rendered before the scan continues in the background — so making Top the
-default did not move the scan onto the critical path.
+whole point of the board. Both orders are the store's own sorts: Top is
+`-mark:vote`, Newest is `-createdAt`, ties broken by key. Ranking is therefore
+over the WHOLE board: the first page is the true top 25, first paint costs
+exactly one round-trip, and switching order is a fresh query (a cursor belongs
+to the order that issued it).
 
 **Search** filters the loaded rows (fuzzy, title and body, AND semantics across
 words) and preserves the active order rather than re-ranking on relevance.
 
-🔴 **Both are honest about their horizon.** Ranking and search share one
-disclosure (`src/disclosure.ts`): whenever the server still has rows the app
-never loaded, the board says so in as many words. A filter that silently misses
-a row reads as "no such request exists", which is a lie the board cannot afford.
-A server-side ranked/searchable read of the shared store is the proper upstream
-fix.
+🔴 **Search is honest about its horizon** (`src/disclosure.ts`): whenever the
+server still has rows the board never loaded, the board says so in as many
+words, and a no-match offers "Load more and search again". A filter that
+silently misses a row reads as "no such request exists", which is a lie the
+board cannot afford. (Top used to carry the same admission, back when it was a
+client-side ranking over a bounded scan of a newest-first store; it no longer
+needs one.)
 
-**Moderation.** Any signed-in viewer can **Report** a row to Civitai moderators.
-The app owner additionally gets **Hide from board** — and that is a *suppression*,
-not a deletion. The platform gives an app owner no delete (`update`/`withdraw`
-are author-scoped and reject `FORBIDDEN` for anyone else), so a hide is an
-owner-authored ledger entry that every client honours by filtering the target
-out. **The request, its text and its votes remain on the server.** The security
-boundary is the `authorUserId` check on that entry — anyone can append a
-ledger-*shaped* row, because `data` is unmoderated — so a forged record is
-ignored as a suppression and is never rendered as a request either. See
-`src/moderation.ts`.
+**Moderation.** Any signed-in viewer can **Report** a request to Civitai
+moderators. Moderation is the platform's: every create and edit passes the
+store's content scanner, and a moderator can hide or delete a reported request,
+after which it is simply not listed. The app owner has no hide of their own —
+see *Known gaps*.
 
 **Width.** The board lays out against **its own box**, not the browser window.
 A block is an iframe in whatever slot the host gave it, and slot width is not
@@ -114,13 +119,16 @@ again** recovers), and a direct load of `app-requests.civit.ai` degrades to an
 "Open on Civitai" landing.
 
 The server enforces a min-trust gate (account age ≥7d, verified, not muted,
-onboarded) on writes/votes and moderates `append` / `update` content (title
-≤200, body ≤4KB, HTML stripped, NSFW/minor blocked) — moderation is
-server-authoritative. The UI surfaces a friendly message on the trust gate and
-the server's own message on a content rejection (inline for form errors, a Toast
-for async vote/edit/withdraw errors), and never crashes on a rejected
-write/vote/edit. User text is rendered as escaped React children (no HTML
-injection).
+onboarded) on every write, vote and report, and scans every create and edit —
+moderation is server-authoritative. Refusals arrive with a machine-readable
+`code`, and `src/errors.ts` maps each code to viewer-facing copy
+(`sign_in_required`, `not_eligible`, `consent_required`, `content_rejected`,
+`version_conflict`, `not_found`, `rate_limited`, and the transient
+`storage_disabled`/`service_unavailable` family) — inline for form errors, a
+Toast for async vote/edit/withdraw errors — and never crashes on a rejected
+call. The title (≤200) and details (≤4096) limits are enforced by the composer;
+the store itself caps only the document's bytes. User text is rendered as
+escaped React children (no HTML injection).
 
 ## Develop
 
@@ -131,38 +139,58 @@ flake reads it and CI reads it via `actions/setup-node`'s `node-version-file`.
 ```bash
 direnv allow           # or: nix develop
 pnpm install --frozen-lockfile
-pnpm run dev:harness   # http://localhost:5187 — SDK mock host, seeded shared board
+pnpm run dev:harness   # http://localhost:5187 — SDK mock host, seeded in-memory board
 ```
 
 The harness plays BOTH halves of the platform locally: a scripted host that
-completes the handshake, and an in-memory server behind a fake `fetch`, seeded
-with a small board (`src/platform/testing.ts`). Everything between the board and
-that `fetch` is the real shipping code. The `mock scenarios` panel can toggle
-anonymous / signed-in and force the next mutation to fail. Nothing is written to
-Civitai.
+completes the handshake, and the SDK's in-memory document store
+(`createFakeStorage` from `@civitai/sdk/testing`, built from this app's real
+manifest), seeded with a small board (`src/platform/testing.ts`). Everything
+between the board and that store is the real shipping code. The `mock scenarios`
+panel can toggle anonymous / signed-in and force the next mutation to fail.
+Nothing is written to Civitai.
 
 ## The platform seam
 
 This app runs on **`@civitai/sdk`**. It holds the block token the host mints and
-calls the public REST routes under `/api/v1/blocks/shared-storage/*` for its
-data; the host bridge is used only for things that are genuinely host UI
-(sign-in, iframe resize).
+reads and writes its data through the document store
+(`app.storage.collection('requests')`); the host bridge is used only for things
+that are genuinely host UI (sign-in, the consent dialog, iframe resize).
+`src/platform/requests.ts` is the one place that maps the board's operations
+onto the store.
 
 Everything platform-shaped lives behind `src/platform/`, and it is the only
 directory that imports `@civitai/sdk`. The board's ~1,300 lines are written
 against those names, so changing transports again means changing that directory
 rather than the board.
 
-### Known gaps on this transport
+### Known gaps
 
-Two things the previous bridge package provided have no equivalent in
-`@civitai/sdk`, and each is handled explicitly rather than silently:
+**Lost with the move to the document store (phase 1 has no equivalent):**
+
+- **The owner's "Hide from board" is gone.** It was a client-side soft-hide: the
+  owner appended a ledger row naming a target, and every client filtered the
+  target out after checking the ledger row's numeric `authorUserId`. The
+  document store hands an app no author id (only `author.isViewer`, or a
+  username under `showAuthor`), and owner-written documents (`write: "owner"`)
+  are refused in phase 1, so there is nothing to verify a ledger entry against.
+  Rather than rebuild the boundary on something weaker, the affordance is
+  removed; hiding is a Civitai moderator action on a reported request.
+- **The server no longer enforces the title/details length limits or strips
+  HTML.** The legacy store did; the document store caps only the document's
+  bytes. The composer still enforces 200/4096 characters, and text is rendered
+  escaped, so nothing renders as HTML — but a client other than this board could
+  store longer text.
+
+**Carried over from the previous transport:**
 
 - **Analytics is a no-op.** `useBlockAnalytics` is a local shim
-  (`src/platform/hooks.ts`). The SDK has no analytics surface and there is no
-  REST route for one, so the board's six `track()` events currently go nowhere
-  (they log in dev). The call sites are kept so that wiring them up later is a
-  change to one function, not to six places.
+  (`src/platform/hooks.ts`), so the board's `track()` events currently go
+  nowhere (they log in dev). The `@civitai/sdk` this app now builds against does
+  ship `app.host.track`, but it records only events declared under
+  `analytics.events` in the manifest — a separate, reviewable manifest change
+  that this port deliberately does not make. The call sites are kept so that
+  wiring them up is a change to one function plus that declaration.
 - **`Modal` is implemented here, not imported.** The components pack ships a
   modal only as a Lit custom element, which under jsdom leaves its children in
   the document while closed and exposes no `role="dialog"`. Both matter for a
@@ -190,14 +218,20 @@ pnpm build       # tsc --noEmit && vite build → dist/
 Coverage, in three layers:
 
 - **Unit** (node, no DOM) — the palette and its WCAG contrast in both themes,
-  the fuzzy matcher's score bands, the moderation ledger (including the forged
-  record), the horizon copy as literal strings, and the motion budget.
+  the fuzzy matcher's score bands, the error mapping driven by real store
+  refusals, the manifest↔code storage seam, the horizon copy as literal strings,
+  and the motion budget.
 - **Component** (jsdom) — every new control, including the overflow menu's full
   keyboard contract (`aria-expanded`, roving tab index, ArrowUp/Down wrapping,
   Home/End, Escape and item-select both restoring focus to the trigger).
-- **Integration** against the SDK mock host over the real postMessage transport,
-  including **failure injection** (`shared.failNext` forces `SHARED_UNAVAILABLE`
-  — the rejected vote, append and report paths) and the anonymous viewer.
+- **Integration** (`src/e2e.test.tsx`) — the real board, hooks, `requests.ts`
+  and SDK client against the SDK's fake document store built from this app's
+  manifest: server-side Top/Newest across pages, votes and their server-side
+  marks, the hydration regression, post/edit/withdraw/report read back from the
+  store, a lost-race edit (`version_conflict`), publish consent granted and
+  declined, the trust gate, moderation rejection, a disabled store, **failure
+  injection** (`failNext` answers the next mutation `503 service_unavailable` —
+  the rejected vote, post and report paths) and the anonymous viewer.
 
 Both themes and `prefers-reduced-motion` are asserted *behaviourally* against
 the mounted app — what the elements do, never that an attribute or a media query

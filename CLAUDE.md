@@ -2,25 +2,32 @@
 
 A Civitai **App Block**: a full-page app served at `/apps/run/app-requests`
 where anyone posts an app/feature idea and up-votes other people's. It is built
-entirely on the **cross-user shared store** (`useSharedStorage()`), plus
-`report()` and `user:read:self`. **No Buzz, no generation** — nothing here can
-charge a viewer.
+on the App Blocks **document store**: one shared collection, `requests`
+(`write: "own"`, a `vote` mark, the built-in `report` mark), declared in
+`block.manifest.json` and reached only through `src/platform/requests.ts`.
+**No Buzz, no generation** — nothing here can charge a viewer.
 
 The load-bearing invariants, all documented in [`README.md`](./README.md):
 
-- **Horizon honesty** (`src/disclosure.ts`). Top-ranking and search both run
-  over a *bounded* client-side scan (≤8 pages × 25). Whenever the server still
-  holds rows the app never loaded, the board must say so. A filter that
-  silently misses a row reads as "no such request exists", which is a lie.
-- **Moderation is suppression, not deletion** (`src/moderation.ts`). The
-  platform gives an app owner no delete, so "Hide from board" is an
-  owner-authored ledger entry every client honours. The `authorUserId` check is
-  the whole security boundary — `data` is unmoderated, so anyone can append a
-  ledger-*shaped* row and it must be ignored as a suppression **and** never
-  rendered as a request.
-- **Vote state comes from the server's `viewerVoted`**, never from a local
-  per-viewer set. The old KV set is what produced the double-click-to-unvote
-  bug; do not reintroduce a client-side mirror of it.
+- **Ranking is the store's** (`-mark:vote` / `-createdAt`, ties on key). The
+  first page IS the top of the board; `sortItems` only re-applies the same order
+  client-side (same tie-break) so optimistic tallies re-rank at once.
+- **Search horizon honesty** (`src/disclosure.ts`). Search filters the LOADED
+  rows only. Whenever the server still holds rows the app never loaded, the
+  board must say so. A filter that silently misses a row reads as "no such
+  request exists", which is a lie.
+- **The manifest's `storage` names and the code's names are one contract**
+  (`src/storage-manifest.test.ts`). A collection or mark the approved manifest
+  does not declare is refused at runtime, and nothing at build time notices.
+  A manifest `storage` change is a manifest change: bump the version.
+- **Vote state comes from the document's `viewer.marks`** (mapped onto
+  `viewerVoted`), never from a local per-viewer set. The old KV set is what
+  produced the double-click-to-unvote bug; do not reintroduce a client-side
+  mirror of it.
+- **There is no owner moderation.** The store exposes no author id and refuses
+  owner-written documents in phase 1, so the old owner "hide" ledger was
+  removed rather than rebuilt on a weaker boundary. Reporting goes to Civitai
+  moderators (the built-in `report` mark, which cannot be withdrawn).
 - **Layout is measured against the block's own box, not the viewport**
   (`src/layout.ts`, the only place a threshold is named). `unmeasured` is not
   `narrow`: every structural branch is gated on `measured`. Tiers differ in
@@ -73,18 +80,18 @@ suffix are topic worktrees of the same remotes, usually on a feature branch.
 
 | The change is about | Repo | Local |
 |---|---|---|
-| This block's UI, board logic, ranking, search, moderation ledger | **`ZacxDev/civitai-app-requests`** (here) | — |
+| This block's UI, board logic, search, the `storage` declaration | **`ZacxDev/civitai-app-requests`** (here) | — |
 | A hook, a type, the mock host, the design system — anything imported from `@civitai/*` | **`civitai/civitai-app-starters`** | `civitai-app-starters` |
-| Host/server behavior: the `/apps/run` page surface, block token + scope enforcement, the money path, **app storage (incl. the shared store's ranking/search and `viewerVoted`)**, the workflow read-model, submit/approval | **`civitai/civitai`** | `civitai` |
+| Host/server behavior: the `/apps/run` page surface, block token + scope enforcement, the money path, **app storage (the document store: sorts, marks, moderation, the trust gate)**, the workflow read-model, submit/approval | **`civitai/civitai`** | `civitai` |
 | `civitai app init/validate/submit`, login, dev tunnel | **`civitai/cli`** (Go) | `cli` |
 | Public developer docs (developer.civitai.com) | **`civitai/civitai-developer-docs`** | `civitai-developer-docs` |
 
 **All five `@civitai/*` dependencies ship from the one starters repo** —
 `packages/civitai-app-sdk`, `civitai-blocks-react`, `civitai-components`,
 `civitai-components-react`, `civitai-theme`. A missing hook, a wrong type, a
-mock host that doesn't simulate something: that is a PR there, not a workaround
-here. **A server-side ranked/searchable read of the shared store is the proper
-upstream fix** for the bounded-scan horizon — that one is `civitai/civitai`.
+mock host or fake store that doesn't simulate something: that is a PR there,
+not a workaround here. **Server-side search of a collection is the proper
+upstream fix** for the search horizon — that one is `civitai/civitai`.
 
 Useful landmarks in `civitai/civitai`: `src/pages/apps/run` (the page surface),
 `src/pages/api/blocks/manifest-schema.ts` + `submit-version.ts`,
@@ -124,11 +131,14 @@ recalling from memory.
 one is invisible in the other:
 
 - **`node`** — `src/*.test.ts`, pure logic, no DOM: the palette's WCAG contrast
-  in both themes, the fuzzy matcher, the moderation ledger (including the
-  forged record), the horizon copy, the motion budget, the two lockstep guards.
-- **`dom`** — `src/*.test.tsx`, jsdom + Testing Library, driving `<App/>`
-  against the SDK mock host over the real postMessage transport, with failure
-  injection (`shared.failNext`) and the anonymous viewer.
+  in both themes, the fuzzy matcher, the error mapping (driven by real
+  refusals from the SDK's fake store), the manifest↔code storage seam, the
+  horizon copy, the motion budget, the two lockstep guards.
+- **`dom`** — `src/*.test.tsx`, jsdom + Testing Library. `src/e2e.test.tsx`
+  drives `<App/>` against `createFakeBoard()` (`src/platform/testing.ts`): a
+  scripted host plus the SDK's `createFakeStorage`, built from the REAL
+  manifest, with failure injection (`failNext`), consent, the trust gate and
+  the anonymous viewer. The other suites mock `useRequestStore`.
 
 **What jsdom structurally cannot see is a fourth layer, and it is not in CI.**
 jsdom has no layout and no pixels. `scripts/measure-search-clear.mjs` and
@@ -141,8 +151,10 @@ of the second one in CI, where no browser exists.
 
 **What cannot be verified here at all:** the live board is server-authoritative.
 The min-trust gate (verified, ≥7d, not muted), content moderation on
-`append`/`update`, and cross-user visibility of a real vote all need a real
-mod-gated host and a second account. No local run, harness run or green suite
+create/edit, the host's consent dialog for `apps:storage:publish`, moderator
+hides, and cross-user visibility of a real vote all need a real mod-gated host
+and a second account. The fake store runs the platform's storage contract, but
+its messages and moderation scanner are the fake's, not the server's. No local run, harness run or green suite
 proves any of them. Say so plainly rather than reporting a green suite as if it
 covered the platform.
 
@@ -170,9 +182,9 @@ file, the incident they exist to prevent.
   from the version's npm publish time, so it clears itself. `npm view <pkg> time`
   gives the publish timestamp; add 24h for the moment CI goes green on its own.
   A `minimumReleaseAgeExclude` entry in `pnpm-workspace.yaml` is the last resort
-  for when the wait is genuinely not affordable — it has been used twice
-  (`@civitai/sdk@0.2.0` in #21, `@civitai/sdk@0.7.0` in #24) and deleted both times
-  once the window closed (#22, #25). 🔴 **Such an entry expires on the CLOCK, not on
+  for when the wait is genuinely not affordable — it has been used three times
+  (`@civitai/sdk@0.2.0` in #21, `@civitai/sdk@0.7.0` in #24, `@civitai/sdk@0.14.0` in
+  the document-store port) and deleted each time once the window closed (#22, #25). 🔴 **Such an entry expires on the CLOCK, not on
   a version bump** — the moment the 24h passes it stops doing anything, and a stale
   one silently weakens the next reader's assumptions about what the gate is still
   covering. Pin the exact `name@version` if you add one; a bare package name exempts

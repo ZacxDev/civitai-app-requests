@@ -30,3 +30,10 @@
 # and `minimumReleaseAgeStrict: false` both set, `pnpm install --frozen-lockfile` still
 # exits 1 (ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION, naming `@civitai/sdk@0.7.0`).
 # Writing `0` stays the one unambiguously destructive edit.
+
+# ⏳ TEMPORARY — the third exclude (document-store port). `@civitai/sdk@0.14.0` is the
+# first release carrying the document-store client this app now runs on; it was
+# published 2026-10-15T06:02:36Z, so the 24h window closes 2026-10-16T06:02:36Z.
+# After that instant this entry does nothing: DELETE IT (as #22 and #25 did).
+minimumReleaseAgeExclude:
+  - '@civitai/sdk@0.14.0'

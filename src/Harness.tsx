@@ -1,8 +1,7 @@
-import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 
-import { OWNER_USER_ID } from './moderation.js';
 import { __configurePlatform } from './platform/client.js';
-import { createFakeCivitai, type MockSharedSeed } from './platform/testing.js';
+import { createFakeBoard, DEV_VIEWER, type FakeSeed } from './platform/testing.js';
 
 // 🔴 The mock chrome deliberately does NOT use the app's palette. Those tokens
 // (`--ar-*`) are written INLINE on the block root, which is a descendant of this
@@ -16,29 +15,28 @@ const CHROME_BORDER = '#30363d';
 const CHROME_BG = '#161b22';
 const CHROME_BG_RAISED = '#21262d';
 
-// A seeded, cross-user board so the local harness looks like a live one. Author
-// ids other than the viewer (7777) exercise the "user #N" label; the viewer's
-// own seed (author 7777) exercises the withdraw affordance; `voters` seeds the
-// vote counts + the one-vote-per-user set.
-const SHARED_SEED: MockSharedSeed[] = [
+// A seeded, cross-user board so the local harness looks like a live one. The
+// viewer's own seed (author 7777) exercises the edit/withdraw affordances;
+// `voters` casts each voter's `vote` mark, which is what the tallies count.
+const SEED: FakeSeed[] = [
   {
     value: { title: 'A prompt-library app with tags & sharing', body: 'Save prompts, tag them, share collections with the community.' },
-    authorUserId: 4021,
+    authorId: 4021,
     voters: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
   },
   {
     value: { title: 'Batch upscaler that queues overnight' },
-    authorUserId: 5099,
+    authorId: 5099,
     voters: [1, 2, 3, 4, 5, 6, 7],
   },
   {
     value: { title: 'A LoRA training cost estimator', body: 'Estimate Buzz before you commit a training run.' },
-    authorUserId: 7777,
+    authorId: DEV_VIEWER.id,
     voters: [1, 2, 3],
   },
   {
     value: { title: 'Dark-mode-aware model cards on profiles' },
-    authorUserId: 3140,
+    authorId: 3140,
     voters: [1],
   },
 ];
@@ -47,25 +45,25 @@ const SHARED_SEED: MockSharedSeed[] = [
  * Local dev fake for the App Requests PAGE app.
  *
  * The real platform mounts the block in a full-bleed iframe, hands it a block
- * token, and serves its data from `/api/v1/blocks/shared-storage/*`. Locally
- * there is neither, so this plays both: a scripted host that completes the
- * handshake, and an in-memory server behind a fake `fetch`, seeded with a small
- * board so the app is immediately usable.
+ * token, and serves its data from the App Blocks document store. Locally there
+ * is neither, so this plays both: a scripted host that completes the handshake,
+ * and the SDK's in-memory document store (`createFakeStorage`, built from this
+ * app's real manifest), seeded with a small board so the app is immediately
+ * usable.
  *
- * Everything between the board and that `fetch` is the REAL shipping code — the
- * hooks and the whole REST client. A loud banner + a scenario panel make it
- * obvious the data is synthetic (nothing is written to Civitai).
+ * Everything between the board and that store is the REAL shipping code — the
+ * hooks, `src/platform/requests.ts` and the SDK's storage client. A loud banner
+ * + a scenario panel make it obvious the data is synthetic (nothing is written
+ * to Civitai).
  */
 export function Harness({ children }: { children: ReactNode }) {
-  // `viewer: undefined` → the SDK's default dev-viewer (id set by the mock host).
-  // We pin the viewer id to 7777 so the seeded "own" entry shows the withdraw
-  // affordance. `null` exercises the anonymous read-only path.
+  // The viewer is pinned to DEV_VIEWER so the seeded "own" entry shows the
+  // edit/withdraw affordances. `anon` exercises the read-only path.
   const [anon, setAnon] = useState(false);
-  // Preview the OWNER's view (the suppression affordance) without being the
-  // owner. Mock-host only — the real host mints the real viewer id.
-  const [asOwner, setAsOwner] = useState(false);
   const [failNext, setFailNext] = useState(0);
   const [key, setKey] = useState(0);
+  /** The scenario whose fake is installed, or `null` while it is being seeded. */
+  const [installed, setInstalled] = useState<number | null>(null);
 
   // Dev-only URL toggle: `?seed=empty` mounts an empty board so the redesigned
   // "no requests yet" empty state is easy to preview/screenshot. Harness-only —
@@ -74,50 +72,40 @@ export function Harness({ children }: { children: ReactNode }) {
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('seed') === 'empty';
 
-  // Rebuilt whenever a scenario toggle changes `key`, which is also what
-  // re-mounts the board — so a fresh store and a fresh board arrive together
-  // and a scenario can never be read against the previous scenario's data.
-  const fake = useMemo(
-    () =>
-      createFakeCivitai({
-        viewer: anon
-          ? null
-          : asOwner
-            ? { id: OWNER_USER_ID, username: 'app-owner' }
-            : { id: 7777, username: 'dev-viewer' },
-        seed: emptySeed ? [] : SHARED_SEED,
-        failNext: failNext || undefined,
-        theme: 'dark',
-      }),
+  // Rebuilt whenever a scenario toggle changes `key`. Seeding is async (it goes
+  // through the store as each author and voter), so the board is mounted only
+  // once THIS scenario's fake is installed — a scenario can never be read
+  // against the previous scenario's data.
+  useEffect(() => {
+    let cancelled = false;
+    setInstalled(null);
+    void createFakeBoard({
+      viewer: anon ? null : DEV_VIEWER,
+      seed: emptySeed ? [] : SEED,
+      failNext: failNext || undefined,
+      theme: 'dark',
+    }).then((fake) => {
+      if (cancelled) return;
+      __configurePlatform(fake.overrides);
+      setInstalled(key);
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` IS the scenario identity
-    [key],
-  );
-
-  // Point the platform singleton at the fake BEFORE the board below renders and
-  // issues its first call. Done during render rather than in an effect for
-  // exactly that ordering reason; it only ever runs under the dev harness.
-  const configuredFor = useRef<number | null>(null);
-  if (configuredFor.current !== key) {
-    __configurePlatform({ transport: fake.transport, fetch: fake.fetch });
-    configuredFor.current = key;
-  }
+  }, [key]);
 
   return (
     // The mock chrome is pinned to the dark terminal look (its own data-theme) so
     // it reads as unmistakably NOT the app, regardless of the app's theme below.
     <div data-theme="dark" style={rootStyle}>
       <div data-harness-banner="mock" style={bannerStyle}>
-        MOCK HOST · shared store is in-memory · nothing is written to Civitai
+        MOCK HOST · document store is in-memory · nothing is written to Civitai
       </div>
       <ScenarioPanel
         anon={anon}
         onToggleAnon={() => {
           setAnon((a) => !a);
-          setKey((k) => k + 1);
-        }}
-        asOwner={asOwner}
-        onToggleOwner={() => {
-          setAsOwner((o) => !o);
           setKey((k) => k + 1);
         }}
         onFailNext={() => {
@@ -127,30 +115,25 @@ export function Harness({ children }: { children: ReactNode }) {
         onReset={() => {
           setFailNext(0);
           setAnon(false);
-          setAsOwner(false);
           setKey((k) => k + 1);
         }}
       />
       {/* `key` re-mounts the board whenever a scenario changes something the
           handshake decides (the viewer), so it re-initialises against the fake
           that was just rebuilt above. */}
-      <div key={key}>{children}</div>
+      {installed === key ? <div key={key}>{children}</div> : null}
     </div>
   );
 }
 
 function ScenarioPanel({
   anon,
-  asOwner,
   onToggleAnon,
-  onToggleOwner,
   onFailNext,
   onReset,
 }: {
   anon: boolean;
-  asOwner: boolean;
   onToggleAnon: () => void;
-  onToggleOwner: () => void;
   onFailNext: () => void;
   onReset: () => void;
 }) {
@@ -160,9 +143,6 @@ function ScenarioPanel({
       <div style={panelBodyStyle}>
         <button type="button" style={btnStyle} onClick={onToggleAnon}>
           {anon ? 'sign in (viewer)' : 'sign out (anon)'}
-        </button>
-        <button type="button" style={btnStyle} onClick={onToggleOwner}>
-          {asOwner ? 'view as member' : 'view as app owner'}
         </button>
         <button type="button" style={btnStyle} onClick={onFailNext}>
           fail next mutation

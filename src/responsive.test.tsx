@@ -2,7 +2,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SharedListItem } from './platform/index.js';
+import type { RequestItem } from './platform/index.js';
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ const h = vi.hoisted(() => ({
 vi.mock('./platform/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./platform/index.js')>()),
   useBlockContext: () => h.ctx,
-  useSharedStorage: () => h.shared,
+  useRequestStore: () => h.shared,
   useRequestSignIn: () => ({ requestSignIn: h.requestSignIn }),
   useBlockAnalytics: () => ({ track: h.track }),
   useBlockResize: () => {},
@@ -130,19 +130,20 @@ afterEach(() => {
 });
 
 let keySeq = 0;
-function makeItem(o: Partial<SharedListItem> & { title?: string; body?: string }): SharedListItem {
+function makeItem(o: Partial<RequestItem> & { title?: string; body?: string }): RequestItem {
   keySeq += 1;
   const { title, body, ...rest } = o;
   return {
     key: o.key ?? `k${keySeq}`,
     // Not the viewer: an "other person's" row is the one that carries
     // `report-btn`, and the recipe's ledger names it.
-    authorUserId: 4021,
+    own: false,
     value: { title: title ?? `Idea ${keySeq}`, ...(body !== undefined ? { body } : {}) },
     count: 3,
     createdAt: new Date('2026-05-02T00:00:00Z'),
     updatedAt: new Date('2026-05-02T00:00:00Z'),
     viewerVoted: false,
+    version: 1,
     ...rest,
   };
 }
@@ -151,7 +152,7 @@ function seedBoard(): void {
   keySeq = 0;
   h.shared.list.mockResolvedValue({
     items: [
-      makeItem({ key: 'own', title: 'A request of my own', authorUserId: 7777, count: 9 }),
+      makeItem({ key: 'own', title: 'A request of my own', own: true, count: 9 }),
       makeItem({ key: 'other', title: 'Someone else’s request', body: 'With details.' }),
     ],
     nextCursor: undefined,
@@ -608,7 +609,7 @@ describe('🔴 the capture recipe’s anchors survive every tier', () => {
 
   it('every testid the recipe names is reachable at every tier', async () => {
     // A LEDGER, so it fails when the set shrinks. `submit-btn`, `edit-btn`,
-    // `withdraw-btn`, `report-btn` and `suppress-btn` live behind the composer
+    // `withdraw-btn` and `report-btn` live behind the composer
     // and the row menu, which this test does not open; they are covered by
     // src/App.test.tsx at the default (unmeasured/regular) layout. What is
     // asserted here is the set reachable AT REST, which is what the capture

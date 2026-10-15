@@ -6,10 +6,11 @@
 //
 // It stays deliberately PRESENTATIONAL: the optimistic count, the in-flight
 // guard, the anon → sign-in nudge and the server reconciliation all live in
-// <App/>, which owns the shared-storage seam.
+// <App/>, which owns the document-store seam.
 //
-// 🔴 The `voted` prop is now hydrated from the server's `viewerVoted` rather
-// than from a client-side guess. See App.tsx `isVoted()` — that change is the
+// 🔴 The `voted` prop is hydrated from the server — the document's own
+// `viewer.marks`, mapped onto `viewerVoted` — rather than from a client-side
+// guess. See App.tsx `isVoted()` — that change is the
 // double-click-to-unvote fix and this component must never re-derive it.
 
 import type { CSSProperties } from 'react';

@@ -7,19 +7,33 @@
 //
 // What lives behind it:
 //   - `hooks.ts`         the hooks the board calls, over the SDK
-//   - `sharedStorage.ts` the board's data layer, over `/api/v1/blocks/shared-storage/*`
+//   - `requests.ts`      the board's data layer, over the document store's `requests` collection
 //   - `breakpoint.ts`    the block's own width tier (a container query)
 //   - `BlockGate.tsx`    the "Open on Civitai" landing when there is no host
 //   - `client.ts`        the one `initialize()` handshake, shared
 
-export { getClient, __configurePlatform, type PlatformOverrides } from './client.js';
-export { createSharedStorage } from './sharedStorage.js';
+export {
+  getClient,
+  getDocumentStorage,
+  requestGrants,
+  __configurePlatform,
+  type PlatformOverrides,
+} from './client.js';
+export {
+  createRequestStore,
+  PUBLISH_SCOPE,
+  REPORT_MARK,
+  REQUESTS_COLLECTION,
+  SORT_PARAM,
+  toRequestItem,
+  VOTE_MARK,
+} from './requests.js';
 export {
   useBlockAnalytics,
   useBlockContext,
   useBlockResize,
   useRequestSignIn,
-  useSharedStorage,
+  useRequestStore,
   type BlockContextValue,
 } from './hooks.js';
 export {
@@ -37,10 +51,11 @@ export {
   type BlockGateProps,
 } from './BlockGate.js';
 export type {
-  SharedAppendValue,
-  SharedListItem,
-  SharedListResult,
-  SharedStorage,
+  RequestItem,
+  RequestPage,
+  RequestStore,
+  RequestValue,
+  SortMode,
   Theme,
   Viewer,
 } from './types.js';
